@@ -60,7 +60,7 @@ def launch_dashboard():
     print("✅ All requirements satisfied")
     print("🌐 Launching dashboard...")
     print()
-    print("📊 Dashboard will open in your browser at: http://localhost:8501")
+    print("📊 Open your browser and navigate to: http://localhost:8501")
     print("⏹️ Press Ctrl+C to stop the dashboard")
     print()
     
@@ -74,6 +74,7 @@ def launch_dashboard():
             "trading_dashboard.py",
             "--server.address", "localhost",
             "--server.port", "8501",
+            "--server.headless", "true",
             "--browser.gatherUsageStats", "false"
         ])
     except KeyboardInterrupt:

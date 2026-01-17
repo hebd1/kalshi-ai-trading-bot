@@ -13,6 +13,18 @@ from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 from src.clients.xai_client import XAIClient
 from src.clients.kalshi_client import KalshiClient
+from src.utils.ai_accuracy_tracker import create_accuracy_tracker
+
+# Initialize AI accuracy tracker for logging predictions
+_accuracy_tracker = None
+
+
+async def get_accuracy_tracker(db_manager: DatabaseManager):
+    """Get or create the accuracy tracker instance."""
+    global _accuracy_tracker
+    if _accuracy_tracker is None:
+        _accuracy_tracker = await create_accuracy_tracker(db_manager)
+    return _accuracy_tracker
 
 
 def _calculate_dynamic_quantity(
@@ -71,6 +83,29 @@ async def make_decision_for_market(
     logger.info(f"Analyzing market: {market.title} ({market.market_id})")
 
     try:
+        # CHECK 0: DEFENSIVE SYNC VERIFICATION (prevent trading with desync)
+        # This is a critical safety check to ensure database matches Kalshi
+        # Only run this check every 10th market to avoid excessive API calls
+        import random
+        if random.random() < 0.1:  # 10% of markets trigger sync check
+            try:
+                db_position_count = len(await db_manager.get_open_positions())
+                kalshi_response = await kalshi_client.get_positions()
+                kalshi_positions = kalshi_response.get('market_positions', [])
+                kalshi_active_count = sum(1 for pos in kalshi_positions if pos.get('position', 0) != 0)
+                
+                if db_position_count != kalshi_active_count:
+                    logger.critical(
+                        f"🚨 SYNC FAILURE DETECTED: DB={db_position_count}, Kalshi={kalshi_active_count}. "
+                        f"HALTING TRADING. Run 'python sync_positions_check.py --auto-heal' to fix."
+                    )
+                    return None
+                else:
+                    logger.debug(f"✅ Defensive sync check passed: {db_position_count} positions match")
+            except Exception as sync_error:
+                logger.warning(f"Defensive sync check failed (non-critical): {sync_error}")
+                # Continue trading - this is just a defensive check
+        
         # CHECK 1: Daily budget enforcement
         daily_cost = await db_manager.get_daily_ai_cost()
         if daily_cost >= settings.trading.daily_ai_budget:
@@ -102,6 +137,86 @@ async def make_decision_for_market(
         # CHECK 5: Category filtering
         if market.category.lower() in [cat.lower() for cat in settings.trading.exclude_low_liquidity_categories]:
             logger.info(f"Market {market.market_id} in excluded category '{market.category}'. Skipping.")
+            return None
+
+        # CHECK 6: Pre-flight position limit check (BEFORE AI call to save credits)
+        from src.utils.position_limits import PositionLimitsManager
+        limits_manager = PositionLimitsManager(db_manager, kalshi_client)
+        current_position_count = await limits_manager._get_position_count()
+        
+        if current_position_count >= limits_manager.max_positions:
+            logger.info(
+                f"❌ PRE-FLIGHT POSITION LIMIT: {current_position_count}/{limits_manager.max_positions} positions. "
+                f"Skipping AI analysis for {market.market_id} to save credits."
+            )
+            return None
+
+        # CHECK 7: Pre-flight cash reserves check (BEFORE AI call to save credits)
+        from src.utils.cash_reserves import CashReservesManager
+        cash_manager = CashReservesManager(db_manager, kalshi_client)
+        cash_status = await cash_manager.get_cash_status()
+        
+        # Skip if we're in a cash emergency or have insufficient reserves
+        if cash_status['emergency_status'] or cash_status['status'] == 'CRITICAL':
+            logger.info(
+                f"❌ PRE-FLIGHT CASH CHECK: Insufficient cash reserves ({cash_status['status']}). "
+                f"Skipping AI analysis for {market.market_id} to save credits."
+            )
+            return None
+
+        # CHECK 8: Pre-flight duplicate position check (BEFORE AI call)
+        existing_position = await db_manager.get_position_by_market_id(market.market_id)
+        if existing_position:
+            logger.info(
+                f"❌ PRE-FLIGHT DUPLICATE: Already have position in {market.market_id}. "
+                f"Skipping AI analysis to save credits."
+            )
+            return None
+
+        # CHECK 9: Pre-flight price spread filter (BEFORE AI call)
+        # Skip markets where prices are too close to 50/50 or spread is too narrow
+        yes_price = market.yes_price
+        no_price = market.no_price
+        price_spread = abs(yes_price - no_price)
+        closest_to_50 = min(abs(yes_price - 0.50), abs(no_price - 0.50))
+        
+        # Skip if both prices are within 5% of 50¢ (45-55 range) - no clear edge potential
+        if closest_to_50 < 0.05:  # Both prices between 45-55¢
+            logger.info(
+                f"❌ PRE-FLIGHT PRICE SPREAD: Market too balanced (YES={yes_price:.2f}, NO={no_price:.2f}). "
+                f"No edge potential. Skipping AI analysis for {market.market_id} to save credits."
+            )
+            return None
+        
+        # Skip if spread is too narrow (<2¢ difference) - insufficient edge opportunity
+        if price_spread < 0.02:
+            logger.info(
+                f"❌ PRE-FLIGHT NARROW SPREAD: Spread too narrow ({price_spread:.3f}). "
+                f"Insufficient edge opportunity. Skipping AI analysis for {market.market_id} to save credits."
+            )
+            return None
+
+        # CHECK 10: Time-to-expiry filter (BEFORE AI call)
+        # Skip markets closing in <1 hour - insufficient time for research/execution
+        time_until_expiry_seconds = market.expiration_ts - time.time()
+        time_until_expiry_hours = time_until_expiry_seconds / 3600
+        
+        if time_until_expiry_hours < 1.0:
+            logger.info(
+                f"❌ PRE-FLIGHT TIME-TO-EXPIRY: Market closes in {time_until_expiry_hours:.1f} hours (<1h). "
+                f"Insufficient time for analysis/execution. Skipping AI analysis for {market.market_id} to save credits."
+            )
+            return None
+
+        # CHECK 11: Price sanity check (BEFORE AI call)
+        # Skip if YES + NO prices don't sum to ~100¢ (data quality issue)
+        price_sum = yes_price + no_price
+        
+        if not (0.95 <= price_sum <= 1.05):  # Allow 5% tolerance for rounding
+            logger.info(
+                f"❌ PRE-FLIGHT SANITY CHECK: Invalid prices (YES={yes_price:.2f} + NO={no_price:.2f} = {price_sum:.2f}). "
+                f"Expected sum ≈ 1.00. Data quality issue. Skipping AI analysis for {market.market_id} to save credits."
+            )
             return None
 
         # Get real-time portfolio balance
@@ -165,6 +280,24 @@ async def make_decision_for_market(
                             time_to_expiry_days=get_time_to_expiry_days(market)
                         )
                         
+                        # Log AI prediction for accuracy tracking
+                        try:
+                            tracker = await get_accuracy_tracker(db_manager)
+                            await tracker.log_prediction(
+                                market_id=market.market_id,
+                                predicted_probability=decision.confidence,
+                                confidence=decision.confidence,
+                                predicted_side=decision.side,
+                                market_price=market.yes_price,
+                                edge_magnitude=abs(decision.confidence - market.yes_price),
+                                strategy="high_confidence",
+                                volume=market.volume,
+                                time_to_expiry_hours=hours_to_expiry
+                            )
+                            logger.info(f"📊 Logged AI prediction for {market.market_id} (high-confidence strategy)")
+                        except Exception as track_error:
+                            logger.warning(f"Failed to log prediction for tracking: {track_error}")
+                        
                         position = Position(
                             market_id=market.market_id,
                             side=decision.side,
@@ -208,7 +341,7 @@ async def make_decision_for_market(
             # Use optimized search with timeout and fallback
             try:
                 news_summary = await asyncio.wait_for(
-                    xai_client.search(market.title, max_length=200),
+                    xai_client.search(market.title, max_length=400),  # Increased for better context
                     timeout=15.0
                 )
                 estimated_search_cost = 0.02  # Rough estimate for search cost
@@ -232,10 +365,18 @@ async def make_decision_for_market(
             )
             return None
         
+        # Get trading decision with LIVE SEARCH enabled for real-time research
         decision = await xai_client.get_trading_decision(
             market_data=market_data,
             portfolio_data=portfolio_data,
             news_summary=news_summary,
+            enable_live_search=True  # Enable live web search during decision
+        )
+        
+        logger.info(
+            f"Trading decision requested with LIVE SEARCH for {market.market_id}",
+            market_title=market.title[:50],
+            news_length=len(news_summary)
         )
 
         # Estimate decision cost (this should come from the XAI client in the future)
@@ -379,6 +520,24 @@ async def make_decision_for_market(
                     market_volatility=estimate_market_volatility(market),
                     time_to_expiry_days=get_time_to_expiry_days(market)
                 )
+                
+                # Log AI prediction for accuracy tracking
+                try:
+                    tracker = await get_accuracy_tracker(db_manager)
+                    await tracker.log_prediction(
+                        market_id=market.market_id,
+                        predicted_probability=decision.confidence,
+                        confidence=decision.confidence,
+                        predicted_side=decision.side,
+                        market_price=price,
+                        edge_magnitude=abs(decision.confidence - price),
+                        strategy="directional_trading",
+                        volume=market.volume,
+                        time_to_expiry_hours=(market.expiration_ts - time.time()) / 3600
+                    )
+                    logger.info(f"📊 Logged AI prediction for {market.market_id} (standard LLM strategy)")
+                except Exception as track_error:
+                    logger.warning(f"Failed to log prediction for tracking: {track_error}")
                 
                 position = Position(
                     market_id=market.market_id,

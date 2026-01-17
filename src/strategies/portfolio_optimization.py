@@ -172,7 +172,7 @@ class AdvancedPortfolioOptimizer:
                 # Update the opportunity object in place
                 opp.kelly_fraction = kelly_val
                 opp.fractional_kelly = kelly_val * 0.5  # Conservative Kelly
-                opp.risk_adjusted_fraction = final_kelly
+                opp.risk_adjusted_fraction = kelly_val  # Same as kelly_fraction for now
             
             # Step 4: Apply correlation adjustments
             correlation_matrix = await self._estimate_correlation_matrix(enhanced_opportunities)
@@ -912,7 +912,11 @@ async def create_market_opportunities_from_markets(
                 logger.info(f"❌ EDGE FILTERED: {market.market_id} - {edge_result.reason}")
             
         except Exception as e:
-            logger.error(f"Error creating opportunity from {market.market_id}: {e}")
+            from src.clients.kalshi_client import MarketNotFoundError
+            if isinstance(e, MarketNotFoundError):
+                logger.debug(f"Market {market.market_id} no longer available (likely expired/settled)")
+            else:
+                logger.error(f"Error creating opportunity from {market.market_id}: {e}")
             continue
     
     logger.info(f"Created {len(opportunities)} opportunities from {len(markets)} markets")
@@ -1130,6 +1134,7 @@ async def _evaluate_immediate_trade(
             side=side,
             quantity=shares,
             entry_price=entry_price,
+            confidence=opportunity.confidence,  # Add confidence field
             live=False,  # Will be set to True ONLY after successful execution
             timestamp=datetime.now(),
             rationale=f"IMMEDIATE TRADE: Edge={opportunity.edge:.1%}, Conf={opportunity.confidence:.1%}, Kelly={kelly_fraction:.1%}, Stop={exit_levels['stop_loss_pct']}%",

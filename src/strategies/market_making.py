@@ -165,7 +165,11 @@ class AdvancedMarketMaker:
                     self.logger.info(f"❌ MARKET MAKING FILTERED: {market.market_id} - Insufficient edge on both sides")
                     
             except Exception as e:
-                self.logger.error(f"Error analyzing market {market.market_id}: {e}")
+                from src.clients.kalshi_client import MarketNotFoundError
+                if isinstance(e, MarketNotFoundError):
+                    self.logger.debug(f"Market {market.market_id} no longer available (likely expired/settled)")
+                else:
+                    self.logger.error(f"Error analyzing market {market.market_id}: {e}")
                 continue
         
         # Sort by expected profitability

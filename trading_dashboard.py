@@ -74,7 +74,7 @@ st.markdown("""
 
 # @st.cache_data(ttl=60)  # Cache for 1 minute - temporarily disabled
 def load_performance_data():
-    """Load performance data from database."""
+    """Load performance data from database and merge with live Kalshi positions."""
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -97,56 +97,100 @@ def load_performance_data():
                         for k, v in stats.items()
                     }
             
-            # Get LIVE positions from Kalshi API (not just database)
+            # Get database positions (which have entry prices)
+            db_positions = await db_manager.get_open_positions()
+            db_positions_map = {}
+            for db_pos in db_positions:
+                key = (db_pos.market_id, db_pos.side)
+                db_positions_map[key] = {
+                    'entry_price': db_pos.entry_price,
+                    'timestamp': db_pos.timestamp.isoformat() if db_pos.timestamp else None,
+                    'strategy': db_pos.strategy,
+                    'confidence': db_pos.confidence,
+                    'stop_loss_price': db_pos.stop_loss_price,
+                    'take_profit_price': db_pos.take_profit_price,
+                    'rationale': db_pos.rationale
+                }
+            
+            # Get LIVE positions from Kalshi API
             positions_response = await kalshi_client.get_positions()
             kalshi_positions = positions_response.get('market_positions', [])
             
-            # Convert Kalshi positions to simple dictionaries for caching
+            # Merge Kalshi positions with database entry prices
             positions = []
+            total_unrealized_pnl = 0.0
+            
             for pos in kalshi_positions:
                 if pos.get('position', 0) != 0:  # Only active positions
                     ticker = pos.get('ticker')
                     position_count = pos.get('position', 0)
+                    side = 'YES' if position_count > 0 else 'NO'
+                    quantity = int(abs(position_count))
                     
-                    # Create a simple dictionary with only serializable types
+                    # Look up entry price from database
+                    db_key = (ticker, side)
+                    db_info = db_positions_map.get(db_key, {})
+                    entry_price = db_info.get('entry_price', 0.50)  # Default if not found
+                    
+                    # Create position dictionary
                     position_dict = {
                         'market_id': str(ticker),
-                        'side': 'YES' if position_count > 0 else 'NO',
-                        'quantity': int(abs(position_count)),
-                        'entry_price': 0.50,  # Will be updated below
-                        'timestamp': datetime.now().isoformat(),
-                        'strategy': 'live_sync',
+                        'side': side,
+                        'quantity': quantity,
+                        'entry_price': float(entry_price),
+                        'current_price': 0.50,  # Will be updated below
+                        'unrealized_pnl': 0.0,
+                        'pnl_percent': 0.0,
+                        'timestamp': db_info.get('timestamp', datetime.now().isoformat()),
+                        'strategy': db_info.get('strategy', 'unknown'),
+                        'confidence': db_info.get('confidence'),
                         'status': 'open',
-                        'stop_loss_price': None,
-                        'take_profit_price': None
+                        'stop_loss_price': db_info.get('stop_loss_price'),
+                        'take_profit_price': db_info.get('take_profit_price'),
+                        'has_db_entry': db_key in db_positions_map
                     }
                     
-                    # Try to get current market price for better accuracy
+                    # Get current market price for valuation and P&L calculation
                     try:
                         market_data = await kalshi_client.get_market(ticker)
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
                             if position_count > 0:  # YES position
-                                position_dict['entry_price'] = float(market_info.get('yes_price', 50) / 100)
+                                current_price = float(market_info.get('yes_price', 50) / 100)
                             else:  # NO position
-                                position_dict['entry_price'] = float(market_info.get('no_price', 50) / 100)
-                    except:
-                        position_dict['entry_price'] = 0.50  # Keep default price as float
+                                current_price = float(market_info.get('no_price', 50) / 100)
+                            
+                            position_dict['current_price'] = current_price
+                            
+                            # Calculate unrealized P&L
+                            # P&L = (current_price - entry_price) * quantity
+                            unrealized_pnl = (current_price - entry_price) * quantity
+                            position_dict['unrealized_pnl'] = round(unrealized_pnl, 2)
+                            
+                            # Calculate P&L percentage
+                            if entry_price > 0:
+                                pnl_percent = ((current_price - entry_price) / entry_price) * 100
+                                position_dict['pnl_percent'] = round(pnl_percent, 1)
+                            
+                            total_unrealized_pnl += unrealized_pnl
+                    except Exception as e:
+                        position_dict['current_price'] = 0.50
+                        print(f"Warning: Could not get market data for {ticker}: {e}")
                     
                     positions.append(position_dict)
             
             await db_manager.close()
             
-            return performance, positions
+            return performance, positions, round(total_unrealized_pnl, 2)
         
-        performance, positions = loop.run_until_complete(get_data())
+        performance, positions, total_unrealized_pnl = loop.run_until_complete(get_data())
         loop.close()
         
-        return performance, positions
+        return performance, positions, total_unrealized_pnl
         
     except Exception as e:
         st.error(f"Error loading performance data: {e}")
-        return {}, []
+        return {}, [], 0.0
 
 # @st.cache_data(ttl=30)  # Cache for 30 seconds - temporarily disabled
 def load_llm_data():
@@ -213,7 +257,8 @@ def load_system_health():
             market_positions = positions_response.get('market_positions', [])
             
             total_position_value = 0
-            positions_count = len(market_positions)
+            # Only count positions with non-zero quantity
+            positions_count = sum(1 for p in market_positions if p.get('position', 0) != 0)
             
             # Calculate current value of all positions
             for position in market_positions:
@@ -296,9 +341,11 @@ def main():
     
     # Load data with error handling
     try:
-        performance_data, positions = load_performance_data()
+        performance_data, positions, total_unrealized_pnl = load_performance_data()
         llm_queries, llm_stats = load_llm_data()
         system_health_data = load_system_health()
+        # Add unrealized P&L to system health data
+        system_health_data['unrealized_pnl'] = total_unrealized_pnl
     except Exception as e:
         st.error(f"Error loading dashboard data: {e}")
         st.info("Please check your system connections and try refreshing.")
@@ -309,7 +356,7 @@ def main():
     st.sidebar.markdown("**📊 Data Status:**")
     st.sidebar.metric("Active Positions", len(positions) if positions else 0)
     st.sidebar.metric("LLM Queries (24h)", len(llm_queries) if llm_queries else 0)
-    st.sidebar.metric("Portfolio Balance", f"${system_health_data.get('total_portfolio_value', 0):.2f}")
+    st.sidebar.metric("Cash Balance", f"${system_health_data.get('available_cash', 0):.2f}")
     
     # Page routing
     if page == "📈 Overview":
@@ -330,65 +377,28 @@ def show_overview(performance_data, positions, system_health_data):
     
     st.header("📈 System Overview")
     
-    # Key metrics row
+    # Key metrics row - Portfolio summary
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
-            label="💰 Portfolio Balance",
+            label="💰 Total Portfolio",
             value=f"${system_health_data['total_portfolio_value']:.2f}",
-            help="Total portfolio value: cash + current positions"
+            help="Total value: Cash + current position values"
         )
     
-    # Add second row for additional financial metrics
-    col1b, col2b, col3b, col4b = st.columns(4)
-    
-    with col1b:
+    with col2:
         st.metric(
             label="💵 Available Cash",
             value=f"${system_health_data['available_cash']:.2f}",
             help="Cash available for new trades"
         )
     
-    with col2b:
+    with col3:
         st.metric(
             label="📊 Position Value",
             value=f"${system_health_data['position_value']:.2f}",
             help="Current market value of all positions"
-        )
-    
-    with col2:
-        total_trades = sum(stats.get('completed_trades', 0) for stats in performance_data.values()) if performance_data else 0
-        st.metric(
-            label="📈 Total Trades",
-            value=total_trades,
-            help="Total completed trades across all strategies"
-        )
-    
-    with col3:
-        # Calculate both realized and unrealized P&L
-        realized_pnl = sum(stats.get('total_pnl', 0) for stats in performance_data.values()) if performance_data else 0
-        
-        # Calculate unrealized P&L from current positions
-        unrealized_pnl = 0
-        if positions:
-            # This is a rough estimate - in practice you'd get current market prices
-            for pos in positions:
-                # Position is now a dictionary
-                if 'entry_price' in pos and 'quantity' in pos:
-                    # Estimate current value vs entry value
-                    # For demo purposes, we'll use a simple calculation
-                    position_value = pos['entry_price'] * pos['quantity']
-                    # Assume current value is similar to entry (this would be calculated with live prices)
-                    unrealized_pnl += 0  # Placeholder - would need current market prices
-        
-        total_pnl = realized_pnl + unrealized_pnl
-        
-        st.metric(
-            label="💹 Total P&L",
-            value=f"${total_pnl:.2f}",
-            delta=f"Realized: ${realized_pnl:.2f}, Unrealized: ${unrealized_pnl:.2f}",
-            help="Total profit/loss: realized from completed trades + unrealized from open positions"
         )
     
     with col4:
@@ -396,6 +406,33 @@ def show_overview(performance_data, positions, system_health_data):
             label="🎯 Active Positions",
             value=len(positions) if positions else 0,
             help="Currently open positions"
+        )
+    
+    # Second row - Performance metrics
+    col1b, col2b, col3b, col4b = st.columns(4)
+    
+    with col1b:
+        total_trades = sum(stats.get('completed_trades', 0) for stats in performance_data.values()) if performance_data else 0
+        st.metric(
+            label="📈 Total Trades",
+            value=total_trades,
+            help="Total completed trades across all strategies"
+        )
+    
+    with col2b:
+        # Calculate realized P&L from completed trades
+        realized_pnl = sum(stats.get('total_pnl', 0) for stats in performance_data.values()) if performance_data else 0
+        unrealized_pnl = system_health_data.get('unrealized_pnl', 0)
+        total_pnl = realized_pnl + unrealized_pnl
+        
+        # Color the delta based on unrealized P&L
+        delta_color = "normal" if unrealized_pnl >= 0 else "inverse"
+        st.metric(
+            label="💹 Total P&L",
+            value=f"${total_pnl:.2f}",
+            delta=f"Unrealized: ${unrealized_pnl:+.2f}",
+            delta_color=delta_color,
+            help=f"Realized: ${realized_pnl:.2f} + Unrealized: ${unrealized_pnl:.2f}"
         )
     
     with col3b:
@@ -411,16 +448,14 @@ def show_overview(performance_data, positions, system_health_data):
         )
     
     with col4b:
-        # Cash utilization  
-        if system_health_data['available_cash'] > 0:
-            initial_cash = system_health_data['total_portfolio_value']  # Approximation
-            cash_used_pct = ((initial_cash - system_health_data['available_cash']) / initial_cash) * 100 if initial_cash > 0 else 0
-        else:
-            cash_used_pct = 100
+        # Win rate across all strategies
+        total_wins = sum(stats.get('winning_trades', 0) for stats in performance_data.values()) if performance_data else 0
+        total_completed = sum(stats.get('completed_trades', 0) for stats in performance_data.values()) if performance_data else 0
+        win_rate = (total_wins / total_completed * 100) if total_completed > 0 else 0
         st.metric(
-            label="💸 Cash Deployed",
-            value=f"{min(100, max(0, cash_used_pct)):.1f}%", 
-            help="Percentage of original cash now in positions"
+            label="🏆 Win Rate",
+            value=f"{win_rate:.1f}%",
+            help="Percentage of winning trades across all strategies"
         )
     
     # Strategy performance summary
@@ -485,14 +520,27 @@ def show_overview(performance_data, positions, system_health_data):
             except:
                 time_str = 'Unknown'
             
+            entry_price = pos.get('entry_price', 0.50)
+            current_price = pos.get('current_price', 0.50)
+            unrealized_pnl = pos.get('unrealized_pnl', 0)
+            pnl_percent = pos.get('pnl_percent', 0)
+            
+            # Format P&L with color indicator
+            if unrealized_pnl > 0:
+                pnl_display = f"🟢 +${unrealized_pnl:.2f} ({pnl_percent:+.1f}%)"
+            elif unrealized_pnl < 0:
+                pnl_display = f"🔴 ${unrealized_pnl:.2f} ({pnl_percent:.1f}%)"
+            else:
+                pnl_display = f"⚪ $0.00 (0.0%)"
+            
             position_data.append({
                 'Market': pos['market_id'][:25] + '...' if len(pos['market_id']) > 25 else pos['market_id'],
                 'Side': pos['side'],
-                'Quantity': pos['quantity'],
-                'Entry Price': f"${pos['entry_price']:.3f}",
-                'Value': f"${pos['quantity'] * pos['entry_price']:.2f}",
-                'Strategy': pos['strategy'] or 'Unknown',
-                'Time': time_str
+                'Qty': pos['quantity'],
+                'Entry': f"${entry_price:.2f}",
+                'Current': f"${current_price:.2f}",
+                'P&L': pnl_display,
+                'Strategy': pos['strategy'] or 'Unknown'
             })
         
         if position_data:
@@ -766,6 +814,25 @@ def show_positions_trades(positions):
         st.warning("No active positions found.")
         return
     
+    # Calculate summary stats
+    total_unrealized = sum(pos.get('unrealized_pnl', 0) for pos in positions)
+    winning_positions = sum(1 for pos in positions if pos.get('unrealized_pnl', 0) > 0)
+    losing_positions = sum(1 for pos in positions if pos.get('unrealized_pnl', 0) < 0)
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        color = "🟢" if total_unrealized >= 0 else "🔴"
+        st.metric("Total Unrealized P&L", f"{color} ${total_unrealized:.2f}")
+    with col2:
+        st.metric("Winning Positions", f"🟢 {winning_positions}")
+    with col3:
+        st.metric("Losing Positions", f"🔴 {losing_positions}")
+    with col4:
+        st.metric("Break-even", f"⚪ {len(positions) - winning_positions - losing_positions}")
+    
+    st.markdown("---")
+    
     # Positions overview
     st.subheader(f"📊 Active Positions ({len(positions)})")
     
@@ -779,17 +846,44 @@ def show_positions_trades(positions):
         except:
             time_str = 'Unknown'
         
+        entry_price = pos.get('entry_price', 0.50)
+        current_price = pos.get('current_price', 0.50)
+        unrealized_pnl = pos.get('unrealized_pnl', 0)
+        pnl_percent = pos.get('pnl_percent', 0)
+        quantity = pos.get('quantity', 0)
+        
+        # Format P&L with color indicator
+        if unrealized_pnl > 0:
+            pnl_display = f"+${unrealized_pnl:.2f}"
+            pnl_pct_display = f"+{pnl_percent:.1f}%"
+            status_icon = "🟢"
+        elif unrealized_pnl < 0:
+            pnl_display = f"${unrealized_pnl:.2f}"
+            pnl_pct_display = f"{pnl_percent:.1f}%"
+            status_icon = "🔴"
+        else:
+            pnl_display = "$0.00"
+            pnl_pct_display = "0.0%"
+            status_icon = "⚪"
+        
+        # Check if we have database entry (shows if entry price is real or estimated)
+        has_db = pos.get('has_db_entry', False)
+        entry_indicator = "" if has_db else " ⚠️"
+        
         position_data.append({
+            'Status': status_icon,
             'Market ID': pos['market_id'],
             'Strategy': pos['strategy'] or 'Unknown',
             'Side': pos['side'],
-            'Quantity': pos['quantity'],
-            'Entry Price': f"${pos['entry_price']:.3f}",
-            'Position Value': f"${pos['quantity'] * pos['entry_price']:.2f}",
-            'Entry Time': time_str,
-            'Status': pos['status'],
-            'Stop Loss': f"${pos['stop_loss_price']:.3f}" if pos['stop_loss_price'] else "None",
-            'Take Profit': f"${pos['take_profit_price']:.3f}" if pos['take_profit_price'] else "None"
+            'Qty': quantity,
+            'Entry Price': f"${entry_price:.3f}{entry_indicator}",
+            'Current Price': f"${current_price:.3f}",
+            'Value': f"${quantity * current_price:.2f}",
+            'P&L': pnl_display,
+            'P&L %': pnl_pct_display,
+            'Opened': time_str,
+            'Stop Loss': f"${pos['stop_loss_price']:.3f}" if pos.get('stop_loss_price') else "None",
+            'Take Profit': f"${pos['take_profit_price']:.3f}" if pos.get('take_profit_price') else "None"
         })
     
     df_positions = pd.DataFrame(position_data)
@@ -830,7 +924,7 @@ def show_positions_trades(positions):
         
         with col1:
             # Value by strategy
-            strategy_values = filtered_df.groupby('Strategy')['Position Value'].apply(
+            strategy_values = filtered_df.groupby('Strategy')['Value'].apply(
                 lambda x: x.str.replace('$', '').astype(float).sum()
             )
             
@@ -878,7 +972,7 @@ def show_risk_management(performance_data, positions, system_balance):
     
     # Calculate risk metrics from live positions
     try:
-        total_deployed = sum(pos['quantity'] * pos['entry_price'] for pos in positions if 'quantity' in pos and 'entry_price' in pos)
+        total_deployed = sum(pos['quantity'] * pos.get('current_price', pos.get('entry_price', 0.50)) for pos in positions if 'quantity' in pos)
         portfolio_utilization = (total_deployed / system_balance * 100) if system_balance > 0 else 0
         
         col1, col2, col3, col4 = st.columns(4)
@@ -907,7 +1001,7 @@ def show_risk_management(performance_data, positions, system_balance):
         
         with col4:
             # Calculate max single position risk
-            position_values = [pos['quantity'] * pos['entry_price'] for pos in positions if 'quantity' in pos and 'entry_price' in pos]
+            position_values = [pos['quantity'] * pos.get('current_price', pos.get('entry_price', 0.50)) for pos in positions if 'quantity' in pos]
             max_position = max(position_values) if position_values else 0
             max_risk_pct = (max_position / system_balance * 100) if system_balance > 0 else 0
             st.metric(
@@ -952,11 +1046,12 @@ def show_risk_management(performance_data, positions, system_balance):
             
             strategy_risk = {}
             for pos in positions:
-                if 'strategy' in pos and 'quantity' in pos and 'entry_price' in pos:
+                if 'strategy' in pos and 'quantity' in pos:
                     strategy = pos['strategy'] or 'Unknown'
                     if strategy not in strategy_risk:
                         strategy_risk[strategy] = {'exposure': 0, 'positions': 0}
-                    strategy_risk[strategy]['exposure'] += pos['quantity'] * pos['entry_price']
+                    price = pos.get('current_price', pos.get('entry_price', 0.50))
+                    strategy_risk[strategy]['exposure'] += pos['quantity'] * price
                     strategy_risk[strategy]['positions'] += 1
             
             if strategy_risk:

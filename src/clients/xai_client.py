@@ -435,15 +435,20 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
         self,
         market_data: Dict,
         portfolio_data: Dict,
-        news_summary: str = ""
+        news_summary: str = "",
+        enable_live_search: bool = True  # NEW: Enable live search by default
     ) -> Optional[TradingDecision]:
         """
         Get a trading decision from the AI with improved token management.
+        
+        Args:
+            enable_live_search: If True, enables live web search during decision making
         """
         try:
-            # First try with full prompt
+            # First try with full prompt (with live search if enabled)
             decision = await self._get_trading_decision_with_prompt(
-                market_data, portfolio_data, news_summary, use_simplified=False
+                market_data, portfolio_data, news_summary, 
+                use_simplified=False, enable_live_search=enable_live_search
             )
             
             if decision:
@@ -452,7 +457,8 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
             # If that fails, try with simplified prompt
             self.logger.info("Trying simplified prompt for trading decision")
             decision = await self._get_trading_decision_with_prompt(
-                market_data, portfolio_data, news_summary, use_simplified=True
+                market_data, portfolio_data, news_summary, 
+                use_simplified=True, enable_live_search=enable_live_search
             )
             
             return decision
@@ -466,10 +472,14 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
         market_data: Dict,
         portfolio_data: Dict,
         news_summary: str = "",
-        use_simplified: bool = False
+        use_simplified: bool = False,
+        enable_live_search: bool = True
     ) -> Optional[TradingDecision]:
         """
         Get trading decision with either full or simplified prompt.
+        
+        Args:
+            enable_live_search: Enable live web search during decision making
         """
         try:
             if use_simplified:
@@ -482,10 +492,12 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
             # Use appropriate token limits
             max_tokens = 4000 if use_simplified else None  # Use default for full prompt
             
+            # Use temperature=0.2 for better reasoning with Grok-4
             response_text, cost = await self._make_completion_request(
                 messages=messages,
-                temperature=0.1,
-                max_tokens=max_tokens
+                temperature=0.2,  # Optimized for Grok-4 reasoning
+                max_tokens=max_tokens,
+                enable_search=enable_live_search  # Enable live search
             )
             
             if not response_text:
@@ -685,11 +697,15 @@ Required format:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
-        max_retries: int = 3
+        max_retries: int = 3,
+        enable_search: bool = False  # NEW: Enable live search for better decisions
     ) -> Tuple[Optional[str], float]:
         """
         Make a completion request with cost tracking and fallback model logic.
         Uses the official xAI SDK pattern from docs.
+        
+        Args:
+            enable_search: If True, enables SearchParameters for live web search during decision making
         """
         # Check daily limits first
         if not await self._check_daily_limits():
@@ -723,12 +739,26 @@ Required format:
             try:
                 start_time = time.time()
                 
-                # Use the official xAI SDK pattern from docs - NO search parameters for regular completions
-                chat = self.client.chat.create(
-                    model=model_to_use,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
+                # Use the official xAI SDK pattern - with optional SearchParameters for live research
+                if enable_search:
+                    # Enable live search for better decision quality
+                    chat = self.client.chat.create(
+                        model=model_to_use,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        search_parameters=SearchParameters(
+                            mode="auto",  # Let model decide when to search
+                            return_citations=True,  # Get source citations
+                        )
+                    )
+                    self.logger.info("Trading decision with LIVE SEARCH enabled", model=model_to_use)
+                else:
+                    # Regular completion without search
+                    chat = self.client.chat.create(
+                        model=model_to_use,
+                        temperature=temperature,
+                        max_tokens=max_tokens
+                    )
                 
                 # Add all messages to the chat
                 for message in messages:

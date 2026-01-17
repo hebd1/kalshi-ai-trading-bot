@@ -7,8 +7,10 @@ import logging
 import logging.handlers
 import os
 import sys
+import glob
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 import structlog
 from structlog import configure, get_logger
@@ -16,19 +18,74 @@ from structlog import configure, get_logger
 from src.config.settings import settings
 
 
+# Configuration constants
+MAX_LOG_FILES = 10  # Keep last 10 log files
+MAX_LOG_SIZE_MB = 50  # Max size per log file in MB
+LOG_RETENTION_DAYS = 7  # Auto-delete logs older than this
+
+
+def cleanup_old_logs(logs_dir: Path, max_files: int = MAX_LOG_FILES, max_days: int = LOG_RETENTION_DAYS) -> None:
+    """
+    Clean up old log files to prevent disk space issues.
+    
+    Args:
+        logs_dir: Directory containing log files
+        max_files: Maximum number of log files to keep
+        max_days: Delete files older than this many days
+    """
+    try:
+        import time
+        
+        # Get all trading system log files
+        log_files = list(logs_dir.glob("trading_system_*.log"))
+        
+        if len(log_files) <= max_files:
+            return
+        
+        # Sort by modification time (oldest first)
+        log_files.sort(key=lambda x: x.stat().st_mtime)
+        
+        # Calculate cutoff time
+        cutoff_time = time.time() - (max_days * 24 * 60 * 60)
+        
+        # Remove excess files and old files
+        files_to_remove = []
+        
+        # Remove oldest files if we have too many
+        excess_count = len(log_files) - max_files
+        if excess_count > 0:
+            files_to_remove.extend(log_files[:excess_count])
+        
+        # Also remove any files older than max_days
+        for log_file in log_files:
+            if log_file.stat().st_mtime < cutoff_time and log_file not in files_to_remove:
+                files_to_remove.append(log_file)
+        
+        for log_file in files_to_remove:
+            try:
+                log_file.unlink()
+            except Exception:
+                pass  # Ignore errors during cleanup
+                
+    except Exception:
+        pass  # Don't fail if cleanup fails
+
+
 def setup_logging(log_level: str = "INFO") -> None:
     """
     Set up structured logging for the trading system.
     Creates a new log file for each run with timestamp.
+    Includes automatic log rotation and cleanup.
     
     Args:
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
     """
-    from datetime import datetime
-    
     # Create logs directory if it doesn't exist
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
+    
+    # Clean up old log files
+    cleanup_old_logs(logs_dir)
     
     # Create timestamped log file name
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -36,6 +93,17 @@ def setup_logging(log_level: str = "INFO") -> None:
     
     # Create a "latest.log" symlink/copy for easy access
     latest_log = logs_dir / "latest.log"
+    
+    # Create rotating file handler for the main log
+    rotating_handler = logging.handlers.RotatingFileHandler(
+        log_file,
+        maxBytes=MAX_LOG_SIZE_MB * 1024 * 1024,  # Convert MB to bytes
+        backupCount=3,  # Keep 3 backup files per session
+        encoding='utf-8'
+    )
+    rotating_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
 
     # Silence noisy loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -59,13 +127,13 @@ def setup_logging(log_level: str = "INFO") -> None:
         cache_logger_on_first_use=True,
     )
     
-    # Configure standard library logging
+    # Configure standard library logging with rotating handler
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=getattr(logging, log_level.upper()),
         handlers=[
-            logging.FileHandler(log_file),
-            logging.FileHandler(latest_log, mode='w'),
+            rotating_handler,
+            logging.FileHandler(latest_log, mode='w', encoding='utf-8'),
             logging.StreamHandler(sys.stdout),
         ],
     )

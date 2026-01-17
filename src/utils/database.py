@@ -59,6 +59,53 @@ class TradeLog:
     rationale: str
     strategy: Optional[str] = None  # Strategy that created this trade
     id: Optional[int] = None
+    exit_reason: Optional[str] = None  # Explicit exit reason (stop_loss, take_profit, market_resolution, time_based)
+    slippage: Optional[float] = None  # Difference between expected and actual fill price
+
+
+@dataclass
+class Order:
+    """Represents an order (buy/sell, market/limit)."""
+    market_id: str
+    side: str  # "YES" or "NO"
+    action: str  # "buy" or "sell"
+    order_type: str  # "market" or "limit"
+    quantity: int
+    created_at: datetime
+    status: str = "pending"  # pending, placed, filled, cancelled, expired
+    price: Optional[float] = None  # Limit price (None for market orders)
+    kalshi_order_id: Optional[str] = None
+    client_order_id: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    filled_at: Optional[datetime] = None
+    fill_price: Optional[float] = None
+    position_id: Optional[int] = None
+    id: Optional[int] = None
+
+
+@dataclass
+class BalanceSnapshot:
+    """Represents a point-in-time snapshot of portfolio balance."""
+    timestamp: datetime
+    cash_balance: float
+    position_value: float
+    total_value: float
+    open_positions: int = 0
+    unrealized_pnl: float = 0.0
+    id: Optional[int] = None
+
+
+@dataclass
+class APILatencyRecord:
+    """Represents an API call latency measurement."""
+    timestamp: datetime
+    endpoint: str
+    method: str
+    latency_ms: float
+    status_code: Optional[int] = None
+    success: bool = True
+    id: Optional[int] = None
+
 
 @dataclass
 class LLMQuery:
@@ -264,7 +311,9 @@ class DatabaseManager(TradingLoggerMixin):
                 entry_timestamp TEXT NOT NULL,
                 exit_timestamp TEXT NOT NULL,
                 rationale TEXT,
-                strategy TEXT
+                strategy TEXT,
+                exit_reason TEXT,
+                slippage REAL
             )
         """)
 
@@ -319,10 +368,62 @@ class DatabaseManager(TradingLoggerMixin):
             )
         """)
 
+        # Orders table for tracking all orders (buy/sell, market/limit)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                market_id TEXT NOT NULL,
+                side TEXT NOT NULL,
+                action TEXT NOT NULL,
+                order_type TEXT NOT NULL,
+                price REAL,
+                quantity INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                kalshi_order_id TEXT,
+                client_order_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                filled_at TEXT,
+                fill_price REAL,
+                position_id INTEGER,
+                FOREIGN KEY (position_id) REFERENCES positions(id)
+            )
+        """)
+
+        # Balance history table for tracking portfolio value over time
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS balance_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                cash_balance REAL NOT NULL,
+                position_value REAL NOT NULL,
+                total_value REAL NOT NULL,
+                open_positions INTEGER NOT NULL DEFAULT 0,
+                unrealized_pnl REAL DEFAULT 0.0
+            )
+        """)
+
+        # API latency tracking table
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS api_latency (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                method TEXT NOT NULL,
+                latency_ms REAL NOT NULL,
+                status_code INTEGER,
+                success BOOLEAN NOT NULL DEFAULT 1
+            )
+        """)
+
         # Create indices for performance
         await db.execute("CREATE INDEX IF NOT EXISTS idx_market_analyses_market_id ON market_analyses(market_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_market_analyses_timestamp ON market_analyses(analysis_timestamp)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_daily_cost_date ON daily_cost_tracking(date)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_orders_market_id ON orders(market_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_balance_history_timestamp ON balance_history(timestamp)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_api_latency_timestamp ON api_latency(timestamp)")
         
         # Run migrations to ensure schema is up to date
         await self._run_migrations(db)
@@ -353,6 +454,19 @@ class DatabaseManager(TradingLoggerMixin):
             if 'target_confidence_change' not in column_names:
                 await db.execute("ALTER TABLE positions ADD COLUMN target_confidence_change REAL")
                 self.logger.info("Added target_confidence_change column to positions table")
+            
+            # Migration: Add exit_reason and slippage columns to trade_logs
+            cursor = await db.execute("PRAGMA table_info(trade_logs)")
+            trade_log_columns = await cursor.fetchall()
+            trade_log_column_names = [col[1] for col in trade_log_columns]
+            
+            if 'exit_reason' not in trade_log_column_names:
+                await db.execute("ALTER TABLE trade_logs ADD COLUMN exit_reason TEXT")
+                self.logger.info("Added exit_reason column to trade_logs table")
+                
+            if 'slippage' not in trade_log_column_names:
+                await db.execute("ALTER TABLE trade_logs ADD COLUMN slippage REAL")
+                self.logger.info("Added slippage column to trade_logs table")
                 
             await db.commit()
             
@@ -562,11 +676,23 @@ class DatabaseManager(TradingLoggerMixin):
         
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
-                INSERT INTO trade_logs (market_id, side, entry_price, exit_price, quantity, pnl, entry_timestamp, exit_timestamp, rationale, strategy)
-                VALUES (:market_id, :side, :entry_price, :exit_price, :quantity, :pnl, :entry_timestamp, :exit_timestamp, :rationale, :strategy)
+                INSERT INTO trade_logs (
+                    market_id, side, entry_price, exit_price, quantity, pnl, 
+                    entry_timestamp, exit_timestamp, rationale, strategy, 
+                    exit_reason, slippage
+                )
+                VALUES (
+                    :market_id, :side, :entry_price, :exit_price, :quantity, :pnl, 
+                    :entry_timestamp, :exit_timestamp, :rationale, :strategy,
+                    :exit_reason, :slippage
+                )
             """, trade_dict)
             await db.commit()
-            self.logger.info(f"Added trade log for market {trade_log.market_id}.")
+            self.logger.info(
+                f"Added trade log for market {trade_log.market_id}",
+                pnl=trade_log.pnl,
+                exit_reason=trade_log.exit_reason
+            )
 
     async def get_performance_by_strategy(self) -> Dict[str, Dict]:
         """
@@ -989,3 +1115,265 @@ class DatabaseManager(TradingLoggerMixin):
                 positions.append(position)
             
             return positions
+
+    # ==================== ORDER TRACKING METHODS ====================
+
+    async def add_order(self, order: Order) -> Optional[int]:
+        """
+        Add a new order to the database.
+        
+        Args:
+            order: The order to add.
+        
+        Returns:
+            The ID of the newly inserted order, or None on failure.
+        """
+        try:
+            order_dict = asdict(order)
+            order_dict['created_at'] = order.created_at.isoformat()
+            if order.updated_at:
+                order_dict['updated_at'] = order.updated_at.isoformat()
+            if order.filled_at:
+                order_dict['filled_at'] = order.filled_at.isoformat()
+            
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("""
+                    INSERT INTO orders (
+                        market_id, side, action, order_type, price, quantity, status,
+                        kalshi_order_id, client_order_id, created_at, updated_at,
+                        filled_at, fill_price, position_id
+                    ) VALUES (
+                        :market_id, :side, :action, :order_type, :price, :quantity, :status,
+                        :kalshi_order_id, :client_order_id, :created_at, :updated_at,
+                        :filled_at, :fill_price, :position_id
+                    )
+                """, order_dict)
+                await db.commit()
+                
+                self.logger.info(
+                    f"Added order for market {order.market_id}",
+                    order_id=cursor.lastrowid,
+                    action=order.action,
+                    order_type=order.order_type
+                )
+                return cursor.lastrowid
+                
+        except Exception as e:
+            self.logger.error(f"Error adding order: {e}")
+            return None
+
+    async def update_order_status(
+        self, 
+        order_id: int, 
+        status: str, 
+        kalshi_order_id: Optional[str] = None,
+        fill_price: Optional[float] = None
+    ) -> None:
+        """Update the status of an order."""
+        now = datetime.now().isoformat()
+        
+        async with aiosqlite.connect(self.db_path) as db:
+            if status == 'filled' and fill_price:
+                await db.execute("""
+                    UPDATE orders 
+                    SET status = ?, updated_at = ?, filled_at = ?, fill_price = ?, kalshi_order_id = COALESCE(?, kalshi_order_id)
+                    WHERE id = ?
+                """, (status, now, now, fill_price, kalshi_order_id, order_id))
+            else:
+                await db.execute("""
+                    UPDATE orders 
+                    SET status = ?, updated_at = ?, kalshi_order_id = COALESCE(?, kalshi_order_id)
+                    WHERE id = ?
+                """, (status, now, kalshi_order_id, order_id))
+            await db.commit()
+            
+        self.logger.info(f"Updated order {order_id} status to {status}")
+
+    async def get_pending_orders(self, market_id: Optional[str] = None) -> List[Order]:
+        """Get all pending orders, optionally filtered by market."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            
+            if market_id:
+                cursor = await db.execute(
+                    "SELECT * FROM orders WHERE status IN ('pending', 'placed') AND market_id = ?",
+                    (market_id,)
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM orders WHERE status IN ('pending', 'placed')"
+                )
+            
+            rows = await cursor.fetchall()
+            
+            orders = []
+            for row in rows:
+                order_dict = dict(row)
+                order_dict['created_at'] = datetime.fromisoformat(order_dict['created_at'])
+                if order_dict['updated_at']:
+                    order_dict['updated_at'] = datetime.fromisoformat(order_dict['updated_at'])
+                if order_dict['filled_at']:
+                    order_dict['filled_at'] = datetime.fromisoformat(order_dict['filled_at'])
+                orders.append(Order(**order_dict))
+            
+            return orders
+
+    async def get_orders_by_position(self, position_id: int) -> List[Order]:
+        """Get all orders for a specific position."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM orders WHERE position_id = ? ORDER BY created_at DESC",
+                (position_id,)
+            )
+            rows = await cursor.fetchall()
+            
+            orders = []
+            for row in rows:
+                order_dict = dict(row)
+                order_dict['created_at'] = datetime.fromisoformat(order_dict['created_at'])
+                if order_dict['updated_at']:
+                    order_dict['updated_at'] = datetime.fromisoformat(order_dict['updated_at'])
+                if order_dict['filled_at']:
+                    order_dict['filled_at'] = datetime.fromisoformat(order_dict['filled_at'])
+                orders.append(Order(**order_dict))
+            
+            return orders
+
+    # ==================== BALANCE HISTORY METHODS ====================
+
+    async def record_balance_snapshot(self, snapshot: BalanceSnapshot) -> Optional[int]:
+        """
+        Record a balance snapshot for historical tracking.
+        
+        Args:
+            snapshot: The balance snapshot to record.
+        
+        Returns:
+            The ID of the inserted record, or None on failure.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                cursor = await db.execute("""
+                    INSERT INTO balance_history (
+                        timestamp, cash_balance, position_value, total_value,
+                        open_positions, unrealized_pnl
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    snapshot.timestamp.isoformat(),
+                    snapshot.cash_balance,
+                    snapshot.position_value,
+                    snapshot.total_value,
+                    snapshot.open_positions,
+                    snapshot.unrealized_pnl
+                ))
+                await db.commit()
+                
+                self.logger.debug(
+                    f"Recorded balance snapshot: ${snapshot.total_value:.2f} total"
+                )
+                return cursor.lastrowid
+                
+        except Exception as e:
+            self.logger.error(f"Error recording balance snapshot: {e}")
+            return None
+
+    async def get_balance_history(
+        self, 
+        hours_back: int = 24,
+        limit: int = 1000
+    ) -> List[BalanceSnapshot]:
+        """Get balance history for the specified time period."""
+        cutoff_time = datetime.now() - timedelta(hours=hours_back)
+        
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT * FROM balance_history 
+                WHERE timestamp >= ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+            """, (cutoff_time.isoformat(), limit))
+            
+            rows = await cursor.fetchall()
+            
+            snapshots = []
+            for row in rows:
+                snapshot_dict = dict(row)
+                snapshot_dict['timestamp'] = datetime.fromisoformat(snapshot_dict['timestamp'])
+                snapshots.append(BalanceSnapshot(**snapshot_dict))
+            
+            return snapshots
+
+    async def get_latest_balance(self) -> Optional[BalanceSnapshot]:
+        """Get the most recent balance snapshot."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("""
+                SELECT * FROM balance_history ORDER BY timestamp DESC LIMIT 1
+            """)
+            row = await cursor.fetchone()
+            
+            if row:
+                snapshot_dict = dict(row)
+                snapshot_dict['timestamp'] = datetime.fromisoformat(snapshot_dict['timestamp'])
+                return BalanceSnapshot(**snapshot_dict)
+            return None
+
+    # ==================== API LATENCY TRACKING METHODS ====================
+
+    async def record_api_latency(self, record: APILatencyRecord) -> None:
+        """Record an API latency measurement."""
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("""
+                    INSERT INTO api_latency (
+                        timestamp, endpoint, method, latency_ms, status_code, success
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    record.timestamp.isoformat(),
+                    record.endpoint,
+                    record.method,
+                    record.latency_ms,
+                    record.status_code,
+                    record.success
+                ))
+                await db.commit()
+        except Exception as e:
+            # Don't fail the main operation if latency logging fails
+            self.logger.debug(f"Failed to record API latency: {e}")
+
+    async def get_api_latency_stats(self, hours_back: int = 24) -> Dict:
+        """Get API latency statistics for the specified time period."""
+        cutoff_time = datetime.now() - timedelta(hours=hours_back)
+        
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            
+            cursor = await db.execute("""
+                SELECT 
+                    endpoint,
+                    COUNT(*) as call_count,
+                    AVG(latency_ms) as avg_latency_ms,
+                    MIN(latency_ms) as min_latency_ms,
+                    MAX(latency_ms) as max_latency_ms,
+                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures
+                FROM api_latency 
+                WHERE timestamp >= ?
+                GROUP BY endpoint
+                ORDER BY call_count DESC
+            """, (cutoff_time.isoformat(),))
+            
+            rows = await cursor.fetchall()
+            
+            return {
+                row['endpoint']: {
+                    'call_count': row['call_count'],
+                    'avg_latency_ms': row['avg_latency_ms'],
+                    'min_latency_ms': row['min_latency_ms'],
+                    'max_latency_ms': row['max_latency_ms'],
+                    'failures': row['failures'],
+                    'success_rate': (row['call_count'] - row['failures']) / row['call_count'] * 100
+                }
+                for row in rows
+            }

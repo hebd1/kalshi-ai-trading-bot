@@ -34,6 +34,14 @@ async def process_and_queue_markets(
         volume = int(market_data.get("volume", 0))
 
         has_position = market_data["ticker"] in existing_position_market_ids
+        
+        # Extract category - try multiple fields, fallback to "unknown"
+        category = (
+            market_data.get("category") or 
+            market_data.get("series_ticker") or 
+            market_data.get("subtitle") or 
+            "unknown"
+        )
 
         market = Market(
             market_id=market_data["ticker"],
@@ -46,7 +54,7 @@ async def process_and_queue_markets(
                     market_data["expiration_time"].replace("Z", "+00:00")
                 ).timestamp()
             ),
-            category=market_data["category"],
+            category=category,
             status=market_data["status"],
             last_updated=datetime.now(),
             has_position=has_position,

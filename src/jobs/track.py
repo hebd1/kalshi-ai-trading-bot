@@ -14,7 +14,7 @@ from typing import Optional
 
 from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
-from src.utils.logging_setup import setup_logging, get_trading_logger
+from src.utils.logging_setup import setup_logging, get_trading_logger, log_trade_execution
 from src.clients.kalshi_client import KalshiClient
 
 async def should_exit_position(
@@ -42,6 +42,26 @@ async def should_exit_position(
             exit_price = current_price
         return True, "market_resolution", exit_price
     
+    # 1.5 CRITICAL FIX: Detect market resolution even if status not yet 'closed'
+    # If price is 0.00 or 1.00, the market has effectively resolved
+    # This prevents false "take_profit" triggers when market resolves against us
+    if current_price <= 0.01 or current_price >= 0.99:
+        # Price at extreme (0 or 1) indicates market resolution
+        # Determine if we won or lost based on price
+        if position.side == "YES":
+            # YES position: wins if yes_price = 1.00, loses if yes_price = 0.00
+            if current_yes_price >= 0.99:
+                exit_price = 1.0  # We won
+            else:
+                exit_price = 0.0  # We lost
+        else:
+            # NO position: wins if no_price = 1.00 (yes_price = 0.00), loses if no_price = 0.00
+            if current_no_price >= 0.99:
+                exit_price = 1.0  # We won
+            else:
+                exit_price = 0.0  # We lost
+        return True, "market_resolution_by_price", exit_price
+    
     # 2. ENHANCED Stop-loss exit using proper logic for YES/NO positions
     if position.stop_loss_price:
         from src.utils.stop_loss_calculator import StopLossCalculator
@@ -63,19 +83,23 @@ async def should_exit_position(
             )
             return True, f"stop_loss_triggered_pnl_{expected_pnl:.2f}", current_price
     
-    # 3. Take-profit exit (enhanced logic for YES/NO)
+    # 3. Take-profit exit (same logic for YES and NO)
+    # When you OWN any contract, you profit by selling at a HIGHER price
     if position.take_profit_price:
-        take_profit_triggered = False
+        # For BOTH YES and NO positions, take profit when price rises above target
+        take_profit_triggered = current_price >= position.take_profit_price
         
-        if position.side == "YES":
-            # For YES positions, take profit when price rises above target
-            take_profit_triggered = current_price >= position.take_profit_price
-        else:
-            # For NO positions, take profit when price falls below target
-            take_profit_triggered = current_price <= position.take_profit_price
-            
+        # SANITY CHECK: Only call it "take_profit" if we're actually profiting!
+        # Calculate expected PnL to verify this is truly a profitable exit
         if take_profit_triggered:
-            return True, "take_profit", current_price
+            expected_pnl = (current_price - position.entry_price) * position.quantity
+            if expected_pnl > 0:
+                return True, "take_profit", current_price
+            else:
+                # This would be a loss, not a profit - something is wrong
+                # This likely means the market resolved against us but API status isn't updated
+                # Don't trigger take_profit - let market resolution logic handle it
+                pass  # Fall through to other checks
     
     # 4. Time-based exit
     if position.max_hold_hours:
@@ -213,10 +237,16 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                         f"Entry: {position.entry_price:.3f}, Exit: {exit_price:.3f}"
                     )
                     
-                    # Calculate PnL
+                    # Calculate PnL and slippage
                     pnl = (exit_price - position.entry_price) * position.quantity
+                    # Slippage = difference between expected exit (take_profit or stop_loss) and actual
+                    slippage = None
+                    if exit_reason == "take_profit" and position.take_profit_price:
+                        slippage = exit_price - position.take_profit_price
+                    elif "stop_loss" in exit_reason and position.stop_loss_price:
+                        slippage = exit_price - position.stop_loss_price
                     
-                    # Create trade log
+                    # Create trade log with explicit exit_reason
                     trade_log = TradeLog(
                         market_id=position.market_id,
                         side=position.side,
@@ -226,12 +256,26 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                         pnl=pnl,
                         entry_timestamp=position.timestamp,
                         exit_timestamp=datetime.now(),
-                        rationale=f"{position.rationale} | EXIT: {exit_reason}"
+                        rationale=position.rationale,
+                        strategy=position.strategy,
+                        exit_reason=exit_reason,
+                        slippage=slippage
                     )
 
                     # Record the exit
                     await db_manager.add_trade_log(trade_log)
                     await db_manager.update_position_status(position.id, 'closed')
+                    
+                    # Log trade execution with helper function
+                    log_trade_execution(
+                        action="EXIT",
+                        market_id=position.market_id,
+                        amount=position.quantity,
+                        price=exit_price,
+                        reason=exit_reason,
+                        pnl=pnl,
+                        slippage=slippage
+                    )
                     
                     exits_executed += 1
                     logger.info(

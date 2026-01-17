@@ -27,6 +27,11 @@ class KalshiAPIError(Exception):
     pass
 
 
+class MarketNotFoundError(KalshiAPIError):
+    """Exception raised when a market is not found (404)."""
+    pass
+
+
 class KalshiClient(TradingLoggerMixin):
     """
     Kalshi API client for automated trading.
@@ -36,25 +41,28 @@ class KalshiClient(TradingLoggerMixin):
     def __init__(
         self, 
         api_key: Optional[str] = None, 
-        private_key_path: str = "kalshi_private_key",
+        private_key_path: Optional[str] = None,
         max_retries: int = 5,
-        backoff_factor: float = 0.5
+        backoff_factor: float = 0.5,
+        db_manager = None  # Optional: for latency tracking
     ):
         """
         Initialize Kalshi client.
         
         Args:
             api_key: Kalshi API key (Key ID from the API key generation)
-            private_key_path: Path to private key file
+            private_key_path: Path to private key file (defaults to env KALSHI_PRIVATE_KEY)
             max_retries: Maximum number of retries for failed requests
             backoff_factor: Factor for exponential backoff
+            db_manager: Optional database manager for latency tracking
         """
         self.api_key = api_key or settings.api.kalshi_api_key
         self.base_url = settings.api.kalshi_base_url
-        self.private_key_path = private_key_path
+        self.private_key_path = private_key_path or settings.api.kalshi_private_key
         self.private_key = None
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
+        self.db_manager = db_manager
         
         # Load private key
         self._load_private_key()
@@ -65,7 +73,72 @@ class KalshiClient(TradingLoggerMixin):
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
         )
         
+        # Latency tracking (in-memory for quick access)
+        self._latency_samples: List[Dict] = []
+        self._max_latency_samples = 100
+        
         self.logger.info("Kalshi client initialized", api_key_length=len(self.api_key) if self.api_key else 0)
+    
+    async def _record_latency(
+        self, 
+        endpoint: str, 
+        method: str, 
+        latency_ms: float, 
+        status_code: Optional[int] = None,
+        success: bool = True
+    ) -> None:
+        """Record API latency for monitoring."""
+        # Store in memory for quick access
+        self._latency_samples.append({
+            'timestamp': datetime.now(),
+            'endpoint': endpoint,
+            'method': method,
+            'latency_ms': latency_ms,
+            'status_code': status_code,
+            'success': success
+        })
+        
+        # Trim old samples
+        if len(self._latency_samples) > self._max_latency_samples:
+            self._latency_samples = self._latency_samples[-self._max_latency_samples:]
+        
+        # Log slow requests
+        if latency_ms > 2000:  # More than 2 seconds
+            self.logger.warning(
+                "Slow API request detected",
+                endpoint=endpoint,
+                latency_ms=latency_ms
+            )
+        
+        # Persist to database if available (non-blocking)
+        if self.db_manager:
+            try:
+                from src.utils.database import APILatencyRecord
+                record = APILatencyRecord(
+                    timestamp=datetime.now(),
+                    endpoint=endpoint,
+                    method=method,
+                    latency_ms=latency_ms,
+                    status_code=status_code,
+                    success=success
+                )
+                asyncio.create_task(self.db_manager.record_api_latency(record))
+            except Exception:
+                pass  # Don't fail if latency recording fails
+    
+    def get_latency_stats(self) -> Dict[str, Any]:
+        """Get latency statistics from in-memory samples."""
+        if not self._latency_samples:
+            return {'avg_latency_ms': 0, 'max_latency_ms': 0, 'min_latency_ms': 0, 'sample_count': 0}
+        
+        latencies = [s['latency_ms'] for s in self._latency_samples]
+        return {
+            'avg_latency_ms': sum(latencies) / len(latencies),
+            'max_latency_ms': max(latencies),
+            'min_latency_ms': min(latencies),
+            'sample_count': len(latencies),
+            'success_rate': sum(1 for s in self._latency_samples if s['success']) / len(self._latency_samples) * 100
+        }
     
     def _load_private_key(self) -> None:
         """Load private key from file."""
@@ -182,6 +255,9 @@ class KalshiClient(TradingLoggerMixin):
                 # Add aggressive delay between requests to prevent 429s
                 await asyncio.sleep(0.5)  # 500ms delay = max 2 requests/second
                 
+                # Track request timing for latency measurement
+                request_start = time.time()
+                
                 response = await self.client.request(
                     method=method,
                     url=url,
@@ -189,22 +265,51 @@ class KalshiClient(TradingLoggerMixin):
                     content=body if body else None
                 )
                 
+                # Calculate latency
+                latency_ms = (time.time() - request_start) * 1000
+                
+                # Record successful request latency
+                await self._record_latency(
+                    endpoint=endpoint,
+                    method=method,
+                    latency_ms=latency_ms,
+                    status_code=response.status_code,
+                    success=response.is_success
+                )
+                
                 response.raise_for_status()
                 return response.json()
                 
             except httpx.HTTPStatusError as e:
                 last_exception = e
+                
+                # Record failed request latency
+                latency_ms = (time.time() - request_start) * 1000 if 'request_start' in locals() else 0
+                await self._record_latency(
+                    endpoint=endpoint,
+                    method=method,
+                    latency_ms=latency_ms,
+                    status_code=e.response.status_code,
+                    success=False
+                )
+                
                 # Rate limit (429) or server errors (5xx) are worth retrying
                 if e.response.status_code == 429 or e.response.status_code >= 500:
                     sleep_time = self.backoff_factor * (2 ** attempt)
                     self.logger.warning(
                         f"API request failed with status {e.response.status_code}. Retrying in {sleep_time:.2f}s...",
                         endpoint=endpoint,
-                        attempt=attempt + 1
+                        attempt=attempt + 1,
+                        latency_ms=latency_ms
                     )
                     await asyncio.sleep(sleep_time)
+                elif e.response.status_code == 404:
+                    # Market not found - this is common for expired/settled markets
+                    error_msg = f"HTTP 404: {e.response.text}"
+                    self.logger.debug("Market not found", endpoint=endpoint)
+                    raise MarketNotFoundError(error_msg)
                 else:
-                    # Don't retry on other client errors (e.g., 400, 401, 404)
+                    # Don't retry on other client errors (e.g., 400, 401)
                     error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
                     self.logger.error("API request failed without retry", error=error_msg, endpoint=endpoint)
                     raise KalshiAPIError(error_msg)

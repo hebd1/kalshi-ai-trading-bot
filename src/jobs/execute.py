@@ -8,9 +8,9 @@ import uuid
 from datetime import datetime
 from typing import Optional, Dict
 
-from src.utils.database import DatabaseManager, Position
+from src.utils.database import DatabaseManager, Position, Order
 from src.config.settings import settings
-from src.utils.logging_setup import get_trading_logger
+from src.utils.logging_setup import get_trading_logger, log_trade_execution
 from src.clients.kalshi_client import KalshiClient, KalshiAPIError
 
 async def execute_position(
@@ -33,35 +33,110 @@ async def execute_position(
     """
     logger = get_trading_logger("trade_execution")
     logger.info(f"Executing position for market: {position.market_id}")
+    
+    client_order_id = str(uuid.uuid4())
+    
+    # Create order record for tracking
+    order = Order(
+        market_id=position.market_id,
+        side=position.side,
+        action="buy",
+        order_type="market",
+        quantity=position.quantity,
+        price=position.entry_price,
+        status="pending",
+        client_order_id=client_order_id,
+        created_at=datetime.now(),
+        position_id=position.id
+    )
 
     if live_mode:
         try:
-            client_order_id = str(uuid.uuid4())
-            order_response = await kalshi_client.place_order(
-                ticker=position.market_id,
-                client_order_id=client_order_id,
-                side=position.side.lower(),
-                action="buy",
-                count=position.quantity,
-                type_="market"
-            )
+            # Track the order in database
+            order_id = await db_manager.add_order(order)
+            
+            # Convert entry price to cents for Kalshi API
+            entry_price_cents = int(position.entry_price * 100)
+            
+            # Even market orders need a price parameter in Kalshi API
+            order_params = {
+                "ticker": position.market_id,
+                "client_order_id": client_order_id,
+                "side": position.side.lower(),
+                "action": "buy",
+                "count": position.quantity,
+                "type_": "market"
+            }
+            
+            # Add price parameter based on side (required by Kalshi API)
+            if position.side.lower() == "yes":
+                order_params["yes_price"] = entry_price_cents
+            else:
+                order_params["no_price"] = entry_price_cents
+            
+            order_response = await kalshi_client.place_order(**order_params)
             
             # For a market order, the fill price is not guaranteed.
             # A more robust implementation would query the /fills endpoint
             # to confirm the execution price after the fact.
             # For now, we will optimistically assume it fills at the entry price.
             fill_price = position.entry_price
+            kalshi_order_id = order_response.get('order', {}).get('order_id')
+            
+            # Update order status to filled
+            if order_id:
+                await db_manager.update_order_status(
+                    order_id, 
+                    'filled', 
+                    kalshi_order_id=kalshi_order_id,
+                    fill_price=fill_price
+                )
 
             await db_manager.update_position_to_live(position.id, fill_price)
-            logger.info(f"Successfully placed LIVE order for {position.market_id}. Order ID: {order_response.get('order', {}).get('order_id')}")
+            
+            # Log trade execution with helper function
+            log_trade_execution(
+                action="BUY",
+                market_id=position.market_id,
+                amount=position.quantity,
+                price=fill_price,
+                confidence=position.confidence,
+                reason=position.rationale,
+                order_type="market",
+                kalshi_order_id=kalshi_order_id,
+                live_mode=True
+            )
+            
+            logger.info(f"Successfully placed LIVE order for {position.market_id}. Order ID: {kalshi_order_id}")
             return True
 
         except KalshiAPIError as e:
+            # Update order status to failed
+            if order_id:
+                await db_manager.update_order_status(order_id, 'failed')
             logger.error(f"Failed to place LIVE order for {position.market_id}: {e}")
             return False
     else:
-        # Simulate the trade
+        # Simulate the trade - still track the order
+        order.status = "filled"
+        order.filled_at = datetime.now()
+        order.fill_price = position.entry_price
+        await db_manager.add_order(order)
+        
         await db_manager.update_position_to_live(position.id, position.entry_price)
+        
+        # Log simulated trade
+        log_trade_execution(
+            action="BUY",
+            market_id=position.market_id,
+            amount=position.quantity,
+            price=position.entry_price,
+            confidence=position.confidence,
+            reason=position.rationale,
+            order_type="market",
+            live_mode=False
+        )
+        
         logger.info(f"Successfully placed SIMULATED order for {position.market_id}")
         return True
 
@@ -87,7 +162,6 @@ async def place_sell_limit_order(
     logger = get_trading_logger("sell_limit_order")
     
     try:
-        import uuid
         client_order_id = str(uuid.uuid4())
         
         # Convert price to cents for Kalshi API
@@ -97,6 +171,23 @@ async def place_sell_limit_order(
         # - If we have YES position, we sell YES shares (action="sell", side="yes")
         # - If we have NO position, we sell NO shares (action="sell", side="no")
         side = position.side.lower()  # "YES" -> "yes", "NO" -> "no"
+        
+        # Create order record for tracking
+        order = Order(
+            market_id=position.market_id,
+            side=position.side,
+            action="sell",
+            order_type="limit",
+            quantity=position.quantity,
+            price=limit_price,
+            status="pending",
+            client_order_id=client_order_id,
+            created_at=datetime.now(),
+            position_id=position.id
+        )
+        
+        # Track the order in database
+        db_order_id = await db_manager.add_order(order)
         
         order_params = {
             "ticker": position.market_id,
@@ -119,10 +210,29 @@ async def place_sell_limit_order(
         response = await kalshi_client.place_order(**order_params)
         
         if response and 'order' in response:
-            order_id = response['order'].get('order_id', client_order_id)
+            kalshi_order_id = response['order'].get('order_id', client_order_id)
             
-            # Record the sell order in the database (we could add a sell_orders table if needed)
-            logger.info(f"✅ SELL LIMIT ORDER placed successfully! Order ID: {order_id}")
+            # Update order status in database
+            if db_order_id:
+                await db_manager.update_order_status(
+                    db_order_id, 
+                    'placed', 
+                    kalshi_order_id=kalshi_order_id
+                )
+            
+            # Log trade execution
+            log_trade_execution(
+                action="SELL_LIMIT",
+                market_id=position.market_id,
+                amount=position.quantity,
+                price=limit_price,
+                reason=f"Limit sell order at {limit_price_cents}¢",
+                order_type="limit",
+                kalshi_order_id=kalshi_order_id,
+                live_mode=True
+            )
+            
+            logger.info(f"✅ SELL LIMIT ORDER placed successfully! Order ID: {kalshi_order_id}")
             logger.info(f"   Market: {position.market_id}")
             logger.info(f"   Side: {side.upper()} (selling {position.quantity} shares)")
             logger.info(f"   Limit Price: {limit_price_cents}¢")
@@ -130,6 +240,9 @@ async def place_sell_limit_order(
             
             return True
         else:
+            # Update order status to failed
+            if db_order_id:
+                await db_manager.update_order_status(db_order_id, 'failed')
             logger.error(f"❌ Failed to place sell limit order: {response}")
             return False
             

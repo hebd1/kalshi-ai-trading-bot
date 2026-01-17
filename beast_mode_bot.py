@@ -32,7 +32,7 @@ from src.jobs.ingest import run_ingestion
 from src.jobs.track import run_tracking
 from src.jobs.evaluate import run_evaluation
 from src.utils.logging_setup import setup_logging, get_trading_logger
-from src.utils.database import DatabaseManager
+from src.utils.database import DatabaseManager, Position
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.config.settings import settings
@@ -64,6 +64,9 @@ class BeastModeBot:
         self.logger = get_trading_logger("beast_mode_bot")
         self.shutdown_event = asyncio.Event()
         
+        # Configure environment (PROD vs TEST credentials)
+        settings.api.configure_environment(use_live=live_mode)
+        
         # Set live trading in settings
         settings.trading.live_trading_enabled = live_mode
         settings.trading.paper_trading_mode = not live_mode
@@ -71,6 +74,10 @@ class BeastModeBot:
         self.logger.info(
             f"🚀 Beast Mode Bot initialized - "
             f"Mode: {'LIVE TRADING' if live_mode else 'PAPER TRADING'}"
+        )
+        self.logger.info(
+            f"🔑 Environment: {'PROD' if live_mode else 'DEMO'} "
+            f"({settings.api.kalshi_base_url})"
         )
 
     async def run_dashboard_mode(self):
@@ -99,8 +106,13 @@ class BeastModeBot:
             self.logger.info("✅ Database initialization complete!")
             
             # Initialize other components
-            kalshi_client = KalshiClient()
+            kalshi_client = KalshiClient(db_manager=db_manager)  # Pass db_manager for latency tracking
             xai_client = XAIClient(db_manager=db_manager)  # Pass db_manager for LLM logging
+            
+            # 🔄 Sync actual positions and balance from Kalshi on startup
+            self.logger.info("🔄 Syncing positions and balance from Kalshi...")
+            await self._sync_positions_and_balance(db_manager, kalshi_client)
+            self.logger.info("✅ Position sync complete!")
             
             # Small delay to ensure everything is ready
             await asyncio.sleep(1)
@@ -118,7 +130,8 @@ class BeastModeBot:
                 ingestion_task,  # Already started
                 asyncio.create_task(self._run_trading_cycles(db_manager, kalshi_client, xai_client)),
                 asyncio.create_task(self._run_position_tracking(db_manager, kalshi_client)),
-                asyncio.create_task(self._run_performance_evaluation(db_manager))
+                asyncio.create_task(self._run_performance_evaluation(db_manager)),
+                asyncio.create_task(self._run_balance_tracking(db_manager, kalshi_client))  # NEW: Balance tracking
             ]
             
             # Setup shutdown handler
@@ -161,6 +174,166 @@ class BeastModeBot:
         except Exception as e:
             self.logger.error(f"Database initialization failed: {e}")
             raise
+
+    async def _sync_positions_and_balance(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
+        """
+        Sync actual positions and balance from Kalshi on startup.
+        
+        This method ensures the database accurately reflects reality by:
+        1. Getting all real positions from Kalshi API
+        2. Marking any DB positions NOT on Kalshi as 'closed'
+        3. Upserting all Kalshi positions into the database
+        """
+        try:
+            import aiosqlite
+            
+            # Get current balance
+            balance_response = await kalshi_client.get_balance()
+            balance = balance_response.get('balance', 0) / 100
+            self.logger.info(f"💰 Current balance: ${balance:.2f}")
+            
+            # Get current positions from Kalshi (the REAL source of truth)
+            positions_response = await kalshi_client.get_positions()
+            market_positions = positions_response.get('market_positions', [])
+            
+            # Build set of active Kalshi market IDs (only those with non-zero positions)
+            kalshi_active_markets = set()
+            for pos in market_positions:
+                ticker = pos.get('ticker')
+                position_count = pos.get('position', 0)
+                if ticker and position_count != 0:
+                    kalshi_active_markets.add(ticker)
+            
+            self.logger.info(f"📊 Kalshi has {len(kalshi_active_markets)} active positions")
+            
+            # Step 1: Mark any DB positions NOT on Kalshi as 'closed'
+            async with aiosqlite.connect(db_manager.db_path) as db:
+                # Get all open positions from database
+                cursor = await db.execute("SELECT id, market_id, side FROM positions WHERE status = 'open'")
+                db_open_positions = await cursor.fetchall()
+                
+                closed_count = 0
+                for pos_row in db_open_positions:
+                    pos_id, market_id, side = pos_row
+                    if market_id not in kalshi_active_markets:
+                        # This position doesn't exist on Kalshi anymore - mark as closed
+                        await db.execute(
+                            "UPDATE positions SET status = 'closed' WHERE id = ?",
+                            (pos_id,)
+                        )
+                        closed_count += 1
+                        self.logger.info(f"   🔄 Marked as closed (not on Kalshi): {market_id} {side}")
+                
+                if closed_count > 0:
+                    await db.commit()
+                    self.logger.info(f"🗑️  Closed {closed_count} stale positions not found on Kalshi")
+            
+            # Step 2: Upsert all Kalshi positions
+            if not kalshi_active_markets:
+                self.logger.info("📊 No active positions on Kalshi")
+                return
+            
+            synced_count = 0
+            updated_count = 0
+            
+            for kalshi_pos in market_positions:
+                ticker = kalshi_pos.get('ticker')
+                position_count = kalshi_pos.get('position', 0)
+                
+                if ticker and position_count != 0:
+                    try:
+                        # Get market data for pricing
+                        market_data = await kalshi_client.get_market(ticker)
+                        if market_data and 'market' in market_data:
+                            market_info = market_data['market']
+                            
+                            # Determine side and current price
+                            if position_count > 0:  # YES position
+                                side = 'YES'
+                                current_price = market_info.get('yes_price', 50) / 100
+                            else:  # NO position
+                                side = 'NO'
+                                current_price = market_info.get('no_price', 50) / 100
+                            
+                            # Check if position already exists in DB (including closed positions!)
+                            # First check for open position
+                            existing_position = await db_manager.get_position_by_market_and_side(ticker, side)
+                            
+                            if existing_position:
+                                # Update existing OPEN position to ensure quantity is correct
+                                async with aiosqlite.connect(db_manager.db_path) as db:
+                                    await db.execute(
+                                        "UPDATE positions SET status = 'open', live = 1, quantity = ? WHERE id = ?",
+                                        (abs(position_count), existing_position.id)
+                                    )
+                                    await db.commit()
+                                updated_count += 1
+                                self.logger.debug(f"   🔄 Updated open: {ticker} - {side} {abs(position_count)}")
+                            else:
+                                # Check for ANY existing position (including closed) due to UNIQUE constraint
+                                async with aiosqlite.connect(db_manager.db_path) as db:
+                                    cursor = await db.execute(
+                                        "SELECT id FROM positions WHERE market_id = ? AND side = ?",
+                                        (ticker, side)
+                                    )
+                                    existing_any = await cursor.fetchone()
+                                    
+                                    if existing_any:
+                                        # Reopen the closed position
+                                        await db.execute(
+                                            "UPDATE positions SET status = 'open', live = 1, quantity = ?, entry_price = ? WHERE id = ?",
+                                            (abs(position_count), current_price, existing_any[0])
+                                        )
+                                        await db.commit()
+                                        updated_count += 1
+                                        self.logger.info(f"   🔄 Reopened closed: {ticker} - {side} {abs(position_count)} @ ${current_price:.2f}")
+                                    else:
+                                        # Truly new position - create it
+                                        position = Position(
+                                            market_id=ticker,
+                                            side=side,
+                                            entry_price=current_price,
+                                            quantity=abs(position_count),
+                                            timestamp=datetime.now(),
+                                            rationale="Synced from Kalshi on startup",
+                                            confidence=0.5,
+                                            live=True,
+                                            status='open',
+                                            strategy='startup_sync'
+                                        )
+                                        
+                                        # Add to database directly (bypass the duplicate check since we just did it)
+                                        position_dict = {
+                                            'market_id': ticker,
+                                            'side': side,
+                                            'entry_price': current_price,
+                                            'quantity': abs(position_count),
+                                            'timestamp': datetime.now().isoformat(),
+                                            'rationale': "Synced from Kalshi on startup",
+                                            'confidence': 0.5,
+                                            'live': True,
+                                            'status': 'open',
+                                            'strategy': 'startup_sync',
+                                            'stop_loss_price': None,
+                                            'take_profit_price': None,
+                                            'max_hold_hours': None,
+                                            'target_confidence_change': None
+                                        }
+                                        await db.execute("""
+                                            INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
+                                            VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
+                                        """, position_dict)
+                                        await db.commit()
+                                        synced_count += 1
+                                        self.logger.info(f"   ✅ Synced new: {ticker} - {side} {abs(position_count)} @ ${current_price:.2f}")
+                    
+                    except Exception as e:
+                        self.logger.warning(f"Could not sync position {ticker}: {e}")
+            
+            self.logger.info(f"✅ Sync complete: {synced_count} new, {updated_count} updated positions")
+            
+        except Exception as e:
+            self.logger.error(f"Error syncing positions: {e}")
 
     async def _run_market_ingestion(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
         """Background task for market data ingestion."""
@@ -283,6 +456,63 @@ class BeastModeBot:
                 await asyncio.sleep(300)  # Run every 5 minutes
             except Exception as e:
                 self.logger.error(f"Error in performance evaluation: {e}")
+                await asyncio.sleep(300)
+
+    async def _run_balance_tracking(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
+        """Background task for tracking portfolio balance over time."""
+        from src.utils.database import BalanceSnapshot
+        
+        while not self.shutdown_event.is_set():
+            try:
+                # Get current balance
+                balance_response = await kalshi_client.get_balance()
+                cash_balance = balance_response.get('balance', 0) / 100  # Convert cents to dollars
+                
+                # Get positions and calculate position value
+                positions_response = await kalshi_client.get_positions()
+                positions = positions_response.get('market_positions', [])
+                
+                position_value = 0.0
+                unrealized_pnl = 0.0
+                open_positions = 0
+                
+                for pos in positions:
+                    qty = pos.get('position', 0)
+                    if qty != 0:
+                        open_positions += 1
+                        # Estimate position value (simplified - assumes 50c average if no price data)
+                        market_exposure = pos.get('market_exposure', 0) / 100
+                        position_value += abs(market_exposure)
+                        
+                        # Calculate unrealized P&L if cost basis is available
+                        realized_pnl = pos.get('realized_pnl', 0) / 100
+                        unrealized_pnl += realized_pnl
+                
+                # Calculate total value
+                total_value = cash_balance + position_value
+                
+                # Create and record snapshot
+                snapshot = BalanceSnapshot(
+                    timestamp=datetime.now(),
+                    cash_balance=cash_balance,
+                    position_value=position_value,
+                    total_value=total_value,
+                    open_positions=open_positions,
+                    unrealized_pnl=unrealized_pnl
+                )
+                
+                await db_manager.record_balance_snapshot(snapshot)
+                
+                self.logger.debug(
+                    f"📊 Balance snapshot: ${total_value:.2f} total "
+                    f"(${cash_balance:.2f} cash + ${position_value:.2f} positions)"
+                )
+                
+                # Record every 5 minutes
+                await asyncio.sleep(300)
+                
+            except Exception as e:
+                self.logger.error(f"Error in balance tracking: {e}")
                 await asyncio.sleep(300)
 
     async def run(self):

@@ -122,7 +122,12 @@ class QuickFlipScalpingStrategy:
                     opportunities.append(no_opportunity)
                     
             except Exception as e:
-                self.logger.error(f"Error analyzing market {market.market_id}: {e}")
+                # Import at top level to check exception type
+                from src.clients.kalshi_client import MarketNotFoundError
+                if isinstance(e, MarketNotFoundError):
+                    self.logger.debug(f"Market {market.market_id} no longer available (likely expired/settled)")
+                else:
+                    self.logger.error(f"Error analyzing market {market.market_id}: {e}")
                 continue
         
         # Sort by expected profit and confidence
@@ -476,6 +481,26 @@ REASON: [brief explanation]
     async def _cut_losses_market_order(self, position: Position) -> bool:
         """Place market order to immediately exit a position."""
         try:
+            # Get current market price for the market sell order
+            market_data = await self.kalshi_client.get_market(position.market_id)
+            if not market_data:
+                self.logger.error(f"Could not get market data for {position.market_id}")
+                return False
+            
+            market_info = market_data.get('market', {})
+            
+            # Get current price based on which side we're selling
+            if position.side.lower() == "yes":
+                # Selling YES shares - use yes_bid (what buyers will pay for YES)
+                current_price_cents = market_info.get('yes_bid', 0)
+            else:
+                # Selling NO shares - use no_bid (what buyers will pay for NO)
+                current_price_cents = market_info.get('no_bid', 0)
+            
+            if not current_price_cents:
+                self.logger.error(f"No bid price available for {position.side} on {position.market_id}")
+                return False
+            
             # Place market sell order to cut losses
             import uuid
             client_order_id = str(uuid.uuid4())
@@ -489,6 +514,12 @@ REASON: [brief explanation]
                 "type": "market"
             }
             
+            # Add price parameter (required by Kalshi API even for market orders)
+            if position.side.lower() == "yes":
+                order_params["yes_price"] = current_price_cents
+            else:
+                order_params["no_price"] = current_price_cents
+            
             live_mode = getattr(settings.trading, 'live_trading_enabled', False)
             
             if live_mode:
@@ -497,7 +528,7 @@ REASON: [brief explanation]
                 if response and 'order' in response:
                     self.logger.info(
                         f"🛑 Loss cut order placed: {position.side} {position.quantity} "
-                        f"MARKET SELL for {position.market_id}"
+                        f"MARKET SELL at {current_price_cents}¢ for {position.market_id}"
                     )
                     return True
                 else:
@@ -506,7 +537,7 @@ REASON: [brief explanation]
             else:
                 self.logger.info(
                     f"📝 SIMULATED loss cut: {position.side} {position.quantity} "
-                    f"MARKET SELL for {position.market_id}"
+                    f"MARKET SELL at {current_price_cents}¢ for {position.market_id}"
                 )
                 return True
                 
