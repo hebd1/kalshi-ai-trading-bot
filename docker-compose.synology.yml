@@ -1,0 +1,86 @@
+version: '3.8'
+
+# Optimized docker-compose configuration for Synology NAS
+# This version includes more conservative resource limits and better error handling
+
+services:
+  kalshi-trading-bot:
+    image: ${DOCKER_USERNAME}/kalshi-ai-trading-bot:${VERSION:-latest}
+    container_name: kalshi-trading-bot
+    restart: unless-stopped
+    
+    environment:
+      # Kalshi API Configuration
+      - KALSHI_API_KEY=${KALSHI_API_KEY}
+      - KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem
+      - KALSHI_BASE_URL=${KALSHI_BASE_URL:-https://demo-api.kalshi.co}
+      
+      # Kalshi PROD API Configuration
+      - KALSHI_API_KEY_PROD=${KALSHI_API_KEY_PROD}
+      - KALSHI_PRIVATE_KEY_PROD=/app/keys/kalshi_private_key.prod.pem
+      - KALSHI_BASE_URL_PROD=${KALSHI_BASE_URL_PROD:-https://api.elections.kalshi.com}
+      
+      # XAI API Configuration
+      - XAI_API_KEY=${XAI_API_KEY}
+      
+      # Python configuration
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      
+      # Timezone
+      - TZ=${TZ:-America/Denver}
+    
+    volumes:
+      # Mount logs directory
+      - /volume1/docker/kalshi-trading-bot/logs:/app/logs
+      
+      # Mount shared data directory
+      - /volume1/docker/kalshi-trading-bot/shared:/app/shared
+      
+      # Mount API keys (read-only) - adjust path to your Synology location
+      - /volume1/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro
+      - /volume1/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro
+      
+      # Mount database
+      - /volume1/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db
+    
+    # Conservative resource limits for Synology NAS
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1536M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Logging configuration (smaller sizes for Synology)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    
+    networks:
+      - kalshi-network
+
+networks:
+  kalshi-network:
+    driver: bridge
+
+# Instructions for Synology NAS:
+# 1. Create directories on your NAS:
+#    mkdir -p /volume1/docker/kalshi-trading-bot/{logs,shared,keys}
+#
+# 2. Copy your API key files to:
+#    /volume1/docker/kalshi-trading-bot/keys/
+#
+# 3. Create .env file in:
+#    /volume1/docker/kalshi-trading-bot/.env
+#
+# 4. Run with:
+#    cd /volume1/docker/kalshi-trading-bot
+#    docker-compose -f docker-compose.synology.yml up -d
+#
+# 5. View logs:
+#    docker-compose -f docker-compose.synology.yml logs -f

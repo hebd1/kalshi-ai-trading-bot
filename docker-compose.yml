@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  kalshi-trading-bot:
+    image: ${DOCKER_USERNAME:-yourusername}/kalshi-ai-trading-bot:latest
+    container_name: kalshi-trading-bot
+    restart: unless-stopped
+    
+    environment:
+      # Kalshi API Configuration
+      - KALSHI_API_KEY=${KALSHI_API_KEY}
+      - KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem
+      - KALSHI_BASE_URL=${KALSHI_BASE_URL:-https://demo-api.kalshi.co}
+      
+      # Kalshi PROD API Configuration (for live trading)
+      - KALSHI_API_KEY_PROD=${KALSHI_API_KEY_PROD}
+      - KALSHI_PRIVATE_KEY_PROD=/app/keys/kalshi_private_key.prod.pem
+      - KALSHI_BASE_URL_PROD=${KALSHI_BASE_URL_PROD:-https://api.elections.kalshi.com}
+      
+      # XAI (Grok) API Configuration
+      - XAI_API_KEY=${XAI_API_KEY}
+      
+      # OpenAI API Configuration (if needed)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # Python configuration
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      
+      # Timezone
+      - TZ=${TZ:-America/Denver}
+    
+    volumes:
+      # Mount logs directory
+      - ./logs:/app/logs
+      
+      # Mount shared data directory
+      - ./shared:/app/shared
+      
+      # Mount API keys (read-only)
+      - ./kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro
+      - ./kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro
+      
+      # Mount database
+      - ./trading_system.db:/app/trading_system.db
+    
+    # Resource limits (adjust based on your Synology NAS specs)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Network configuration
+    networks:
+      - kalshi-network
+
+  # Optional: Dashboard service
+  kalshi-dashboard:
+    image: ${DOCKER_USERNAME:-yourusername}/kalshi-ai-trading-bot:latest
+    container_name: kalshi-dashboard
+    restart: unless-stopped
+    command: ["python", "beast_mode_dashboard.py"]
+    
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - TZ=${TZ:-America/Denver}
+    
+    volumes:
+      - ./logs:/app/logs
+      - ./shared:/app/shared
+      - ./trading_system.db:/app/trading_system.db:ro
+    
+    ports:
+      - "8501:8501"  # Streamlit default port
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    
+    networks:
+      - kalshi-network
+    
+    depends_on:
+      - kalshi-trading-bot
+
+networks:
+  kalshi-network:
+    driver: bridge

@@ -53,12 +53,43 @@ The authors are not responsible for any financial losses incurred through the us
 
 ## 🛠️ Installation
 
-### Prerequisites
+### Quick Start with Docker (Recommended)
+
+The easiest way to get started is with Docker:
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/kalshi-ai-trading-bot.git
+cd kalshi-ai-trading-bot
+
+# Copy environment template
+cp .env.docker.example .env
+
+# Edit .env file with your API keys
+# KALSHI_API_KEY=your_kalshi_api_key
+# XAI_API_KEY=your_xai_api_key
+
+# Add your Kalshi private key file
+# Place kalshi_private_key.pem in the project root
+
+# Start the bot
+docker-compose up -d
+
+# Verify deployment
+chmod +x verify_post_deployment.sh
+./verify_post_deployment.sh
+```
+
+### Manual Installation
+
+For development or custom setups:
+
+#### Prerequisites
 - Python 3.12+
-- Kalshi API account
+- Kalshi API account with private key file
 - xAI API key (for Grok-4 access)
 
-### Setup
+#### Setup Steps
 
 1. **Clone the repository**
    ```bash
@@ -82,12 +113,25 @@ The authors are not responsible for any financial losses incurred through the us
    ```bash
    KALSHI_API_KEY=your_kalshi_api_key
    XAI_API_KEY=your_xai_api_key
+   KALSHI_PRIVATE_KEY=kalshi_private_key.pem
    ```
 
-5. **Initialize the database**
+5. **Add API keys**
+   Place your Kalshi private key file (`kalshi_private_key.pem`) in the project root
+
+6. **Initialize the database**
    ```bash
    python src/utils/database.py
    ```
+
+### Deployment
+
+For production deployments, see our comprehensive [Deployment Guide](DEPLOYMENT.md) which covers:
+- Docker deployment options
+- CI/CD with GitHub Actions
+- Security best practices
+- Monitoring and logging
+- Backup strategies
 
 ## 🚀 Quick Start
 

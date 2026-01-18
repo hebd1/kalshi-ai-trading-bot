@@ -1,0 +1,210 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  DOCKER_IMAGE: elihebdon/kalshi-ai-trading-bot
+  PYTHON_VERSION: '3.12'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify and Build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r requirements-dev.txt
+        
+    - name: Run verification tests
+      run: |
+        python run_tests.py
+      env:
+        KALSHI_API_KEY: ${{ secrets.KALSHI_API_KEY }}
+        XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-labels: ${{ steps.meta.outputs.labels }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_TOKEN }}
+        
+    - name: Extract Docker metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.DOCKER_IMAGE }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=tag
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [verify, build-docker]
+    if: |
+      always() && 
+      github.event_name == 'push' && 
+      github.ref == 'refs/heads/master' &&
+      needs.verify.result == 'success' &&
+      needs.build-docker.result == 'success'
+    
+    steps:
+    - name: Deploy to Synology NAS
+      uses: appleboy/ssh-action@master
+      with:
+        host: helloadrastea.synology.me
+        username: deimos
+        port: 2222
+        key: ${{ secrets.ADRASTEA_SSH_KEY }}
+        script: |
+          set -e
+          export PATH=$PATH:/usr/local/bin
+          
+          echo "=== Kalshi Trading Bot Deployment Started ==="
+          echo "Connected to $(hostname)"
+          echo "Current working directory: $(pwd)"
+          echo "Timestamp: $(date)"
+          
+          echo "=== Checking Docker Status ==="
+          docker --version
+          docker ps | head -5
+          
+          echo "=== Stopping existing container ==="
+          if docker ps -q -f name=kalshi-trading-bot; then
+            docker stop kalshi-trading-bot
+            echo "Container stopped successfully"
+          else
+            echo "No running container found"
+          fi
+          
+          echo "=== Removing old container ==="
+          if docker ps -a -q -f name=kalshi-trading-bot; then
+            docker rm kalshi-trading-bot
+            echo "Container removed successfully"
+          else
+            echo "No existing container to remove"
+          fi
+          
+          echo "=== Pulling latest image ==="
+          docker pull ${{ env.DOCKER_IMAGE }}:latest
+          
+          echo "=== Starting new container ==="
+          docker run -d \
+            --name kalshi-trading-bot \
+            --restart unless-stopped \
+            -v /volume1/docker/kalshi-trading-bot/logs:/app/logs:rw \
+            -v /volume1/docker/kalshi-trading-bot/shared:/app/shared:rw \
+            -v /volume1/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro \
+            -v /volume1/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro \
+            -v /volume1/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db:rw \
+            -e KALSHI_API_KEY=${{ secrets.KALSHI_API_KEY }} \
+            -e KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem \
+            -e KALSHI_BASE_URL=${{ secrets.KALSHI_BASE_URL }} \
+            -e KALSHI_API_KEY_PROD=${{ secrets.KALSHI_API_KEY_PROD }} \
+            -e KALSHI_PRIVATE_KEY_PROD=/app/keys/kalshi_private_key.prod.pem \
+            -e KALSHI_BASE_URL_PROD=${{ secrets.KALSHI_BASE_URL_PROD }} \
+            -e XAI_API_KEY=${{ secrets.XAI_API_KEY }} \
+            -e PYTHONUNBUFFERED=1 \
+            -e PYTHONPATH=/app \
+            -e TZ=America/Denver \
+            ${{ env.DOCKER_IMAGE }}:latest
+          
+          echo "=== Verifying deployment ==="
+          sleep 5
+          if docker ps | grep kalshi-trading-bot; then
+            echo "✓ Deployment successful"
+            docker logs --tail 10 kalshi-trading-bot
+          else
+            echo "✗ Deployment failed"
+            docker logs kalshi-trading-bot
+            exit 1
+          fi
+          
+          echo "=== Kalshi Trading Bot Deployment Completed ==="
+
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [verify, build-docker, deploy]
+    if: always()
+    
+    steps:
+    - name: Determine overall status
+      id: status
+      run: |
+        if [[ "${{ needs.deploy.result }}" == "success" ]]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "message=✅ Kalshi Trading Bot deployment completed successfully" >> $GITHUB_OUTPUT
+        elif [[ "${{ needs.verify.result }}" == "failure" ]]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=❌ Verification failed - deployment skipped" >> $GITHUB_OUTPUT
+        elif [[ "${{ needs.build-docker.result }}" == "failure" ]]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "message=❌ Docker build failed - deployment skipped" >> $GITHUB_OUTPUT
+        else
+          echo "status=skipped" >> $GITHUB_OUTPUT
+          echo "message=⚠️ Pipeline completed with warnings or was skipped" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Report status
+      run: |
+        echo "### Kalshi Trading Bot Pipeline Status: ${{ steps.status.outputs.status }}"
+        echo "${{ steps.status.outputs.message }}"
+        echo ""
+        echo "**Job Results:**"
+        echo "- Verify: ${{ needs.verify.result }}"
+        echo "- Docker Build: ${{ needs.build-docker.result }}"
+        echo "- Deploy: ${{ needs.deploy.result }}"

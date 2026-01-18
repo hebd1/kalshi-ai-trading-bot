@@ -1,0 +1,71 @@
+# Ignore git and version control
+.git
+.gitignore
+.gitattributes
+
+# Ignore development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+*.temp
+.cache/
+
+# Ignore test files and coverage reports
+test_results/
+htmlcov/
+.coverage
+*.coverage.*
+.pytest_cache/
+tests/
+__pycache__/
+
+# Ignore Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Ignore shared directory (will be mounted as volume)
+shared/*
+logs/*
+data/*
+
+# Ignore documentation
+*.md
+docs/
+
+# Ignore Docker files themselves
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+*.sh
+
+# Ignore environment files (secrets should be passed at runtime)
+.env*
+secrets.sh
+env.template
+
+# Ignore development dependencies
+requirements-dev.txt
+run_tests.py
+
+# Ignore private keys (should be mounted as volumes)
+*.pem
+*.key
+
+# Ignore database files (should be in volumes)
+*.db
+*.sqlite
+*.sqlite3
+
+# Ignore performance and analysis files
+performance_analysis_*.json
+analysis_reports/
