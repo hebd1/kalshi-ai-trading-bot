@@ -38,10 +38,7 @@ jobs:
         
     - name: Run verification tests
       run: |
-        python run_tests.py
-      env:
-        KALSHI_API_KEY: ${{ secrets.KALSHI_API_KEY }}
-        XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+        python run_tests.py --ci
 
   build-docker:
     name: Build Docker Image
@@ -145,11 +142,11 @@ jobs:
           docker run -d \
             --name kalshi-trading-bot \
             --restart unless-stopped \
-            -v /volume1/docker/kalshi-trading-bot/logs:/app/logs:rw \
-            -v /volume1/docker/kalshi-trading-bot/shared:/app/shared:rw \
-            -v /volume1/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro \
-            -v /volume1/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro \
-            -v /volume1/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db:rw \
+            -v /volume3/docker/kalshi-trading-bot/logs:/app/logs:rw \
+            -v /volume3/docker/kalshi-trading-bot/shared:/app/shared:rw \
+            -v /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro \
+            -v /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro \
+            -v /volume3/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db:rw \
             -e KALSHI_API_KEY=${{ secrets.KALSHI_API_KEY }} \
             -e KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem \
             -e KALSHI_BASE_URL=${{ secrets.KALSHI_BASE_URL }} \

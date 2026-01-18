@@ -6,6 +6,7 @@ This script runs optimized tests with live output and minimal API calls.
 Use this whenever making significant changes to ensure nothing is broken.
 """
 
+import argparse
 import subprocess
 import sys
 import os
@@ -106,27 +107,66 @@ def run_full_tests():
 
 
 def main():
-    """Run tests based on user choice."""
+    """Run tests based on user choice or command line arguments."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Kalshi Trading System Test Suite")
+    parser.add_argument("--mode", "-m", choices=["quick", "full", "custom"], 
+                        help="Test mode: quick (default), full, or custom")
+    parser.add_argument("--pattern", "-p", help="Test pattern for custom mode (e.g., tests/test_decide.py)")
+    parser.add_argument("--ci", action="store_true", help="Run in CI mode (non-interactive)")
+    
+    args = parser.parse_args()
+    
     print("🧪 Kalshi Trading System - Test Suite")
     print("=" * 60)
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
-    print("Choose test mode:")
-    print("1. 🚀 Quick tests (30 seconds - imports, config, database)")
-    print("2. 🧪 Full tests (2-3 minutes - includes API calls)")
-    print("3. 🔧 Custom test (specify which tests to run)")
-    print()
     
-    try:
-        choice = input("Enter choice (1/2/3) or press Enter for quick tests: ").strip()
-    except KeyboardInterrupt:
-        print("\n👋 Cancelled by user")
-        return 0
+    # Determine test mode
+    choice = None
+    if args.mode:
+        if args.mode == "quick":
+            choice = "1"
+        elif args.mode == "full":
+            choice = "2"
+        elif args.mode == "custom":
+            choice = "3"
+    elif args.ci:
+        # CI mode - default to quick tests
+        print("🤖 Running in CI mode - defaulting to quick tests")
+        choice = "1"
+    else:
+        # Interactive mode
+        print("Choose test mode:")
+        print("1. 🚀 Quick tests (30 seconds - imports, config, database)")
+        print("2. 🧪 Full tests (2-3 minutes - includes API calls)")
+        print("3. 🔧 Custom test (specify which tests to run)")
+        print()
+        
+        try:
+            choice = input("Enter choice (1/2/3) or press Enter for quick tests: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            if sys.stdin.isatty():
+                print("\n👋 Cancelled by user")
+            else:
+                print("\n🤖 Non-interactive environment detected - defaulting to quick tests")
+                choice = "1"
+    
+    # Default to quick tests if no choice made
+    if not choice:
+        choice = "1"
     
     if choice == "2":
         results = run_full_tests()
     elif choice == "3":
-        test_pattern = input("Enter test pattern (e.g., tests/test_decide.py): ").strip()
+        test_pattern = args.pattern
+        if not test_pattern and sys.stdin.isatty():
+            try:
+                test_pattern = input("Enter test pattern (e.g., tests/test_decide.py): ").strip()
+            except (KeyboardInterrupt, EOFError):
+                print("\n👋 Cancelled by user")
+                return 0
+        
         if test_pattern:
             results = run_quick_tests()
             results.append(run_command_live(
@@ -134,6 +174,7 @@ def main():
                 f"Custom test: {test_pattern}"
             ))
         else:
+            print("⚠️ No test pattern provided - running quick tests instead")
             results = run_quick_tests()
     else:
         # Default to quick tests

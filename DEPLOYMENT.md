@@ -22,21 +22,16 @@ This project uses automated CI/CD with GitHub Actions that follows the same patt
 
 ### 1. Configure GitHub Repository Secrets
 
-Go to your GitHub repository → Settings → Secrets and variables → Actions, and add these secrets:
+Go to your GitHub repository → Settings → Secrets and variables → Actions, and add these deployment secrets:
 
-#### Required Secrets:
+#### Required Deployment Secrets:
 ```
-DOCKER_USERNAME          # Your DockerHub username
+DOCKER_USERNAME          # Your DockerHub username  
 DOCKER_TOKEN            # DockerHub access token (not password!)
 ADRASTEA_SSH_KEY        # Private SSH key for Synology NAS
-
-KALSHI_API_KEY          # Demo/test API key
-KALSHI_BASE_URL         # https://demo-api.kalshi.co
-KALSHI_API_KEY_PROD     # Production API key
-KALSHI_BASE_URL_PROD    # https://api.elections.kalshi.com
-
-XAI_API_KEY             # Your xAI (Grok) API key
 ```
+
+> **Note**: API keys (KALSHI_API_KEY, XAI_API_KEY, etc.) are managed via the `.env` file directly on your Synology NAS for better security and easier management. Only deployment-specific secrets are stored in GitHub.
 
 #### Creating DockerHub Token:
 1. Go to DockerHub → Account Settings → Security → Access Tokens
@@ -119,26 +114,52 @@ Before first deployment, ensure these directories exist on your NAS:
 ssh deimos@helloadrastea.synology.me -p 2222
 
 # Create directory structure
-sudo mkdir -p /volume1/docker/kalshi-trading-bot/{logs,shared,keys}
+sudo mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys}
 
 # Set permissions
-sudo chown -R 1000:1000 /volume1/docker/kalshi-trading-bot
-sudo chmod 755 /volume1/docker/kalshi-trading-bot
-sudo chmod 777 /volume1/docker/kalshi-trading-bot/{logs,shared}
-sudo chmod 755 /volume1/docker/kalshi-trading-bot/keys
+sudo chown -R 1000:1000 /volume3/docker/kalshi-trading-bot
+sudo chmod 755 /volume3/docker/kalshi-trading-bot
+sudo chmod 777 /volume3/docker/kalshi-trading-bot/{logs,shared}
+sudo chmod 755 /volume3/docker/kalshi-trading-bot/keys
 ```
 
-### 5. Copy API Keys to Synology
+### 5. Setup Environment Variables on Synology
 
-The private keys need to be manually placed on the NAS:
+The API keys and private keys need to be set up on the NAS:
 
+#### Step 1: Create .env file on Synology
 ```bash
-# Copy keys from local machine to NAS
-scp -P 2222 kalshi_private_key.pem deimos@helloadrastea.synology.me:/volume1/docker/kalshi-trading-bot/keys/
-scp -P 2222 kalshi_private_key.prod.pem deimos@helloadrastea.synology.me:/volume1/docker/kalshi-trading-bot/keys/
+# SSH to your Synology NAS
+ssh deimos@helloadrastea.synology.me -p 2222
+
+# Create .env file in the kalshi-trading-bot directory
+cat > /volume3/docker/kalshi-trading-bot/.env << 'EOF'
+# Kalshi API Configuration (Demo/Test Environment)
+KALSHI_API_KEY=your_demo_api_key_here
+KALSHI_BASE_URL=https://demo-api.kalshi.co
+KALSHI_PRIVATE_KEY=kalshi_private_key.pem
+
+# Kalshi Production API Configuration (if using live trading)
+KALSHI_API_KEY_PROD=your_production_api_key_here
+KALSHI_BASE_URL_PROD=https://api.elections.kalshi.com
+KALSHI_PRIVATE_KEY_PROD=kalshi_private_key.prod.pem
+
+# xAI API Configuration
+XAI_API_KEY=your_xai_grok_api_key_here
+EOF
+
+# Set secure permissions
+chmod 600 /volume3/docker/kalshi-trading-bot/.env
+```
+
+#### Step 2: Copy Private Keys to Synology
+```bash
+# Copy private keys from local machine to NAS
+scp -P 2222 kalshi_private_key.pem deimos@helloadrastea.synology.me:/volume3/docker/kalshi-trading-bot/keys/
+scp -P 2222 kalshi_private_key.prod.pem deimos@helloadrastea.synology.me:/volume3/docker/kalshi-trading-bot/keys/
 
 # Set proper permissions
-ssh deimos@helloadrastea.synology.me -p 2222 "chmod 400 /volume1/docker/kalshi-trading-bot/keys/*.pem"
+ssh deimos@helloadrastea.synology.me -p 2222 "chmod 400 /volume3/docker/kalshi-trading-bot/keys/*.pem"
 ```
 
 ## 🏗️ Manual Deployment (Alternative)
@@ -152,14 +173,29 @@ cp .env.docker.example .env
 # Edit .env with your actual credentials
 ```
 
-Example `.env`:
+Example `.env` (for local development/testing):
 ```env
+# DockerHub Configuration (for manual builds only)
 DOCKER_USERNAME=yourdockerhubusername
+
+# Kalshi API Configuration (Demo/Test Environment)
 KALSHI_API_KEY=your_demo_key
+KALSHI_BASE_URL=https://demo-api.kalshi.co
+KALSHI_PRIVATE_KEY=kalshi_private_key.pem
+
+# Kalshi Production API Configuration (if using live trading)
 KALSHI_API_KEY_PROD=your_prod_key
+KALSHI_BASE_URL_PROD=https://api.elections.kalshi.com
+KALSHI_PRIVATE_KEY_PROD=kalshi_private_key.prod.pem
+
+# xAI API Configuration
 XAI_API_KEY=your_xai_key
+
+# System Configuration
 TZ=America/Denver
 ```
+
+> **Note**: For production deployment, API keys should be configured in the `.env` file directly on your Synology NAS as described in the automated deployment section above.
 
 ### 2. Build and Push to DockerHub
 
@@ -195,14 +231,29 @@ cp .env.docker.example .env
 # Edit .env with your actual credentials
 ```
 
-Example `.env`:
+Example `.env` (for local development/testing):
 ```env
+# DockerHub Configuration (for manual builds only)
 DOCKER_USERNAME=yourdockerhubusername
+
+# Kalshi API Configuration (Demo/Test Environment)
 KALSHI_API_KEY=your_demo_key
+KALSHI_BASE_URL=https://demo-api.kalshi.co
+KALSHI_PRIVATE_KEY=kalshi_private_key.pem
+
+# Kalshi Production API Configuration (if using live trading)
 KALSHI_API_KEY_PROD=your_prod_key
+KALSHI_BASE_URL_PROD=https://api.elections.kalshi.com
+KALSHI_PRIVATE_KEY_PROD=kalshi_private_key.prod.pem
+
+# xAI API Configuration
 XAI_API_KEY=your_xai_key
+
+# System Configuration
 TZ=America/Denver
 ```
+
+> **Note**: For production deployment, API keys should be configured in the `.env` file directly on your Synology NAS as described in the automated deployment section above.
 
 ### 2. Build and Push to DockerHub
 
@@ -250,10 +301,10 @@ SSH into your Synology NAS:
 ssh admin@your-nas-ip
 
 # Create directory structure
-mkdir -p /volume1/docker/kalshi-trading-bot/{logs,shared,keys}
+mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys}
 
 # Navigate to the directory
-cd /volume1/docker/kalshi-trading-bot
+cd /volume3/docker/kalshi-trading-bot
 ```
 
 #### Step 2: Copy API Keys
@@ -262,11 +313,11 @@ Copy your private key files to the NAS:
 
 ```bash
 # From your local machine
-scp kalshi_private_key.pem admin@your-nas-ip:/volume1/docker/kalshi-trading-bot/keys/
-scp kalshi_private_key.prod.pem admin@your-nas-ip:/volume1/docker/kalshi-trading-bot/keys/
+scp kalshi_private_key.pem admin@your-nas-ip:/volume3/docker/kalshi-trading-bot/keys/
+scp kalshi_private_key.prod.pem admin@your-nas-ip:/volume3/docker/kalshi-trading-bot/keys/
 
 # Set proper permissions
-ssh admin@your-nas-ip "chmod 400 /volume1/docker/kalshi-trading-bot/keys/*.pem"
+ssh admin@your-nas-ip "chmod 400 /volume3/docker/kalshi-trading-bot/keys/*.pem"
 ```
 
 #### Step 3: Create Environment File
@@ -274,7 +325,7 @@ ssh admin@your-nas-ip "chmod 400 /volume1/docker/kalshi-trading-bot/keys/*.pem"
 Create `.env` file on your NAS:
 
 ```bash
-cat > /volume1/docker/kalshi-trading-bot/.env << 'EOF'
+cat > /volume3/docker/kalshi-trading-bot/.env << 'EOF'
 DOCKER_USERNAME=yourusername
 KALSHI_API_KEY=your_demo_key
 KALSHI_API_KEY_PROD=your_prod_key
@@ -287,14 +338,14 @@ EOF
 #### Step 4: Copy Docker Compose File
 
 ```bash
-scp docker-compose.synology.yml admin@your-nas-ip:/volume1/docker/kalshi-trading-bot/docker-compose.yml
+scp docker-compose.synology.yml admin@your-nas-ip:/volume3/docker/kalshi-trading-bot/docker-compose.yml
 ```
 
 #### Step 5: Start the Container
 
 ```bash
 ssh admin@your-nas-ip
-cd /volume1/docker/kalshi-trading-bot
+cd /volume3/docker/kalshi-trading-bot
 
 # Pull the image
 docker-compose pull
@@ -329,10 +380,10 @@ DOCKER_USERNAME=yourusername ./docker-run.sh
    - **Container Name**: kalshi-trading-bot
    - **Enable auto-restart**: ✓
    - **Volume Settings**:
-     - Add: `/volume1/docker/kalshi-trading-bot/logs` → `/app/logs`
-     - Add: `/volume1/docker/kalshi-trading-bot/shared` → `/app/shared`
-     - Add: `/volume1/docker/kalshi-trading-bot/keys` → `/app/keys` (Read-only)
-     - Add: `/volume1/docker/kalshi-trading-bot/trading_system.db` → `/app/trading_system.db`
+     - Add: `/volume3/docker/kalshi-trading-bot/logs` → `/app/logs`
+     - Add: `/volume3/docker/kalshi-trading-bot/shared` → `/app/shared`
+     - Add: `/volume3/docker/kalshi-trading-bot/keys` → `/app/keys` (Read-only)
+     - Add: `/volume3/docker/kalshi-trading-bot/trading_system.db` → `/app/trading_system.db`
    - **Environment Variables**:
      - `KALSHI_API_KEY`: your_demo_key
      - `KALSHI_API_KEY_PROD`: your_prod_key
@@ -514,15 +565,15 @@ docker exec kalshi-trading-bot ls -la /app/keys/
 
 ```bash
 # Create backup directory
-mkdir -p /volume1/backup/kalshi-trading-bot
+mkdir -p /volume3/backup/kalshi-trading-bot
 
 # Backup database
-cp /volume1/docker/kalshi-trading-bot/trading_system.db \
-   /volume1/backup/kalshi-trading-bot/trading_system_$(date +%Y%m%d).db
+cp /volume3/docker/kalshi-trading-bot/trading_system.db \
+   /volume3/backup/kalshi-trading-bot/trading_system_$(date +%Y%m%d).db
 
 # Backup logs
-tar -czf /volume1/backup/kalshi-trading-bot/logs_$(date +%Y%m%d).tar.gz \
-   /volume1/docker/kalshi-trading-bot/logs/
+tar -czf /volume3/backup/kalshi-trading-bot/logs_$(date +%Y%m%d).tar.gz \
+   /volume3/docker/kalshi-trading-bot/logs/
 ```
 
 ### Automated Backups
@@ -533,7 +584,7 @@ Create a cron job on Synology:
 crontab -e
 
 # Add daily backup at 2 AM
-0 2 * * * /volume1/docker/kalshi-trading-bot/backup.sh
+0 2 * * * /volume3/docker/kalshi-trading-bot/backup.sh
 ```
 
 ## 📞 Support
@@ -624,7 +675,7 @@ After successful deployment:
 - [ ] Database backups configured
 - [ ] Monitoring and alerting set up
 - [ ] Risk management parameters reviewed
-- [ ] Production API keys configured
+- [ ] Production API keys configured in .env file on Synology NAS
 - [ ] Disaster recovery plan in place
 
 Happy trading! 🚀
