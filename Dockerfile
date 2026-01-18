@@ -26,6 +26,11 @@ COPY performance_analysis.py /app/
 COPY performance_system_manager.py /app/
 COPY get_positions.py /app/
 COPY launch_dashboard.py /app/
+COPY trading_dashboard.py /app/
+COPY start_services.sh /app/
+
+# Make startup script executable
+RUN chmod +x /app/start_services.sh
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -35,5 +40,8 @@ ENV PYTHONPATH=/app
 HEALTHCHECK --interval=5m --timeout=30s --start-period=30s --retries=3 \
     CMD python -c "import sqlite3; db = sqlite3.connect('/app/trading_system.db'); db.close(); print('Health check passed')" || exit 1
 
-# Run the bot script
-CMD ["python", "beast_mode_bot.py"]
+# Expose dashboard port
+EXPOSE 8501
+
+# Run both services via startup script
+CMD ["/app/start_services.sh"]

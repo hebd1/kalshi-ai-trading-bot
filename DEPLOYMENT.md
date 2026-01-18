@@ -87,7 +87,10 @@ When you push to master, the pipeline will:
    - Connect via SSH to `helloadrastea.synology.me:2222`
    - Stop and remove existing `kalshi-trading-bot` container
    - Pull latest image from DockerHub
-   - Start new container with proper volume mounts and environment variables   - Verify deployment health
+   - Start new dual-service container with trading bot and dashboard
+   - Expose port 8501 for dashboard access  
+   - Mount volumes and load API keys from `.env` file
+   - Verify deployment health and dashboard accessibility
 
 ### Container Health Checks
 
@@ -289,7 +292,9 @@ docker push yourusername/kalshi-ai-trading-bot:latest
 docker push yourusername/kalshi-ai-trading-bot:v1.0.0
 ```
 
-## 🖥️ Deploying to Synology NAS
+## 🖥️ Deploying to Synology NAS (Dual-Service Mode)
+
+The deployment automatically starts both the trading bot and dashboard simultaneously. The dashboard will be accessible at `http://your-nas-ip:8501`.
 
 ### Option 1: Using Docker Compose (Recommended)
 
@@ -503,16 +508,19 @@ If you get database locked errors:
 2. Check if database file is corrupted
 3. Restore from backup or start fresh
 
-## 📊 Optional: Dashboard Deployment
+## 📊 Dashboard Access
 
-The docker-compose file includes an optional dashboard service. To enable it:
+The trading bot automatically includes a web dashboard that runs simultaneously with the trading system. No additional configuration required!
 
-1. Uncomment the `kalshi-dashboard` service in `docker-compose.yml`
-2. Start both services:
-   ```bash
-   docker-compose up -d
-   ```
-3. Access dashboard at: `http://your-nas-ip:8501`
+**Dashboard Features:**
+- Real-time performance monitoring
+- Live position tracking
+- Strategy analytics
+- Risk management metrics
+
+**Access URL:** `http://your-nas-ip:8501`
+
+The dashboard starts automatically when you deploy the container and is accessible immediately after deployment.
 
 ## 🔒 Security Best Practices
 

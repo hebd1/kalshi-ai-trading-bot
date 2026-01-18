@@ -72,12 +72,14 @@ cp .env.docker.example .env
 # Add your Kalshi private key file
 # Place kalshi_private_key.pem in the project root
 
-# Start the bot
+# Start the bot (includes both trading bot and web dashboard)
 docker-compose up -d
 
 # Verify deployment
 chmod +x verify_post_deployment.sh
 ./verify_post_deployment.sh
+
+# Access the web dashboard at http://localhost:8501
 ```
 
 ### Manual Installation
@@ -141,9 +143,10 @@ For production deployments, see our comprehensive [Deployment Guide](DEPLOYMENT.
 python beast_mode_bot.py
 ```
 
-### Dashboard Interface
+### Dashboard Interface (Manual Development Setup)
 ```bash
-# Launch the web dashboard
+# Launch the web dashboard manually (for development)
+# Note: Docker deployment automatically includes the dashboard
 python launch_dashboard.py
 ```
 

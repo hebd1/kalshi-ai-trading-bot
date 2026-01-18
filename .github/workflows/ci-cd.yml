@@ -138,22 +138,17 @@ jobs:
           echo "=== Pulling latest image ==="
           docker pull ${{ env.DOCKER_IMAGE }}:latest
           
-          echo "=== Starting new container ==="
+          echo "=== Starting new dual-service container (trading bot + dashboard) ==="
           docker run -d \
             --name kalshi-trading-bot \
             --restart unless-stopped \
+            -p 8501:8501 \
             -v /volume3/docker/kalshi-trading-bot/logs:/app/logs:rw \
             -v /volume3/docker/kalshi-trading-bot/shared:/app/shared:rw \
             -v /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro \
             -v /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro \
+            -v /volume3/docker/kalshi-trading-bot/.env:/app/.env:ro \
             -v /volume3/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db:rw \
-            -e KALSHI_API_KEY=${{ secrets.KALSHI_API_KEY }} \
-            -e KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem \
-            -e KALSHI_BASE_URL=${{ secrets.KALSHI_BASE_URL }} \
-            -e KALSHI_API_KEY_PROD=${{ secrets.KALSHI_API_KEY_PROD }} \
-            -e KALSHI_PRIVATE_KEY_PROD=/app/keys/kalshi_private_key.prod.pem \
-            -e KALSHI_BASE_URL_PROD=${{ secrets.KALSHI_BASE_URL_PROD }} \
-            -e XAI_API_KEY=${{ secrets.XAI_API_KEY }} \
             -e PYTHONUNBUFFERED=1 \
             -e PYTHONPATH=/app \
             -e TZ=America/Denver \
@@ -162,8 +157,9 @@ jobs:
           echo "=== Verifying deployment ==="
           sleep 5
           if docker ps | grep kalshi-trading-bot; then
-            echo "✓ Deployment successful"
-            docker logs --tail 10 kalshi-trading-bot
+            echo "✓ Dual-service deployment successful"
+            echo "📊 Dashboard available at: http://${{ secrets.ADRASTEA_HOST }}:8501"
+            docker logs --tail 15 kalshi-trading-bot
           else
             echo "✗ Deployment failed"
             docker logs kalshi-trading-bot

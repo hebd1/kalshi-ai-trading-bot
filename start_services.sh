@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# Startup script for running both trading bot and dashboard
+set -e
+
+echo "🚀 Starting Kalshi AI Trading Bot with Dashboard..."
+
+# Function to handle shutdown
+shutdown_handler() {
+    echo "🛑 Shutdown signal received..."
+    
+    # Kill dashboard process if running
+    if [ ! -z "$DASHBOARD_PID" ]; then
+        echo "⏹️ Stopping dashboard (PID: $DASHBOARD_PID)..."
+        kill $DASHBOARD_PID 2>/dev/null || true
+        wait $DASHBOARD_PID 2>/dev/null || true
+    fi
+    
+    # Kill trading bot process if running
+    if [ ! -z "$TRADING_BOT_PID" ]; then
+        echo "⏹️ Stopping trading bot (PID: $TRADING_BOT_PID)..."
+        kill $TRADING_BOT_PID 2>/dev/null || true
+        wait $TRADING_BOT_PID 2>/dev/null || true
+    fi
+    
+    echo "✅ All processes stopped gracefully"
+    exit 0
+}
+
+# Set up signal handlers
+trap shutdown_handler SIGTERM SIGINT SIGQUIT
+
+# Start the dashboard in the background
+echo "📊 Starting Streamlit dashboard on port 8501..."
+python launch_dashboard.py &
+DASHBOARD_PID=$!
+echo "✅ Dashboard started with PID: $DASHBOARD_PID"
+
+# Give dashboard time to start
+sleep 10
+
+# Verify dashboard is running
+if ! kill -0 $DASHBOARD_PID 2>/dev/null; then
+    echo "❌ Dashboard failed to start, checking logs..."
+    cat /app/logs/latest.log 2>/dev/null || echo "No logs available"
+    exit 1
+fi
+
+echo "✅ Dashboard is running and accessible on port 8501"
+
+# Start the trading bot
+echo "🤖 Starting trading bot..."
+python beast_mode_bot.py &
+TRADING_BOT_PID=$!
+echo "✅ Trading bot started with PID: $TRADING_BOT_PID"
+
+# Wait for both processes and monitor them
+while true; do
+    # Check if dashboard is still running
+    if ! kill -0 $DASHBOARD_PID 2>/dev/null; then
+        echo "❌ Dashboard process died unexpectedly!"
+        shutdown_handler
+        exit 1
+    fi
+    
+    # Check if trading bot is still running
+    if ! kill -0 $TRADING_BOT_PID 2>/dev/null; then
+        echo "❌ Trading bot process died unexpectedly!"
+        shutdown_handler
+        exit 1
+    fi
+    
+    # Wait before checking again
+    sleep 30
+done

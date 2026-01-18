@@ -30,6 +30,10 @@ services:
       # Timezone
       - TZ=${TZ:-America/Denver}
     
+    ports:
+      # Expose dashboard on port 8501
+      - "8501:8501"
+    
     volumes:
       # Mount logs directory
       - /volume3/docker/kalshi-trading-bot/logs:/app/logs
