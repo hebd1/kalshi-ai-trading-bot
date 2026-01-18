@@ -46,7 +46,9 @@ docs/
 Dockerfile*
 .dockerignore
 docker-compose*.yml
-*.sh
+# Keep start_services.sh but ignore other shell scripts
+docker-*.sh
+commands.sh
 
 # Ignore environment files (secrets should be passed at runtime)
 .env*
