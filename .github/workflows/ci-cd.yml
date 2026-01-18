@@ -107,7 +107,6 @@ jobs:
         port: 2222
         key: ${{ secrets.ADRASTEA_SSH_KEY }}
         script: |
-          set -e
           export PATH=$PATH:/usr/local/bin
           
           echo "=== Kalshi Trading Bot Deployment Started ==="
@@ -119,27 +118,35 @@ jobs:
           docker --version
           docker ps | head -5
           
-          echo "=== Stopping existing container ==="
-          if docker ps -q -f name=kalshi-trading-bot; then
-            docker stop kalshi-trading-bot
+          echo "=== Managing existing container ==="
+          # Check if container exists and is running
+          if docker ps -q -f name=kalshi-trading-bot | grep -q .; then
+            echo "🛑 Stopping running container..."
+            docker stop kalshi-trading-bot || echo "Warning: Failed to stop container"
             echo "Container stopped successfully"
           else
-            echo "No running container found"
+            echo "ℹ️ No running container found"
           fi
           
-          echo "=== Removing old container ==="
-          if docker ps -a -q -f name=kalshi-trading-bot; then
-            docker rm kalshi-trading-bot
+          # Check if container exists (stopped)
+          if docker ps -a -q -f name=kalshi-trading-bot | grep -q .; then
+            echo "🗑️ Removing existing container..."
+            docker rm kalshi-trading-bot || echo "Warning: Failed to remove container"
             echo "Container removed successfully"
           else
-            echo "No existing container to remove"
+            echo "ℹ️ No existing container to remove"
           fi
           
           echo "=== Pulling latest image ==="
-          docker pull ${{ env.DOCKER_IMAGE }}:latest
+          if docker pull ${{ env.DOCKER_IMAGE }}:latest; then
+            echo "✅ Successfully pulled latest image"
+          else
+            echo "❌ Failed to pull image"
+            exit 1
+          fi
           
           echo "=== Starting new dual-service container (trading bot + dashboard) ==="
-          docker run -d \
+          if docker run -d \
             --name kalshi-trading-bot \
             --restart unless-stopped \
             -p 8501:8501 \
@@ -152,21 +159,45 @@ jobs:
             -e PYTHONUNBUFFERED=1 \
             -e PYTHONPATH=/app \
             -e TZ=America/Denver \
-            ${{ env.DOCKER_IMAGE }}:latest
-          
-          echo "=== Verifying deployment ==="
-          sleep 5
-          if docker ps | grep kalshi-trading-bot; then
-            echo "✓ Dual-service deployment successful"
-            echo "📊 Dashboard available at: http://${{ secrets.ADRASTEA_HOST }}:8501"
-            docker logs --tail 15 kalshi-trading-bot
+            ${{ env.DOCKER_IMAGE }}:latest; then
+            echo "✅ Container started successfully"
           else
-            echo "✗ Deployment failed"
-            docker logs kalshi-trading-bot
+            echo "❌ Failed to start container"
+            echo "Container logs:"
+            docker logs kalshi-trading-bot 2>&1 || echo "No logs available"
             exit 1
           fi
           
-          echo "=== Kalshi Trading Bot Deployment Completed ==="
+          echo "=== Verifying deployment ==="
+          echo "⏳ Waiting for container to start..."
+          sleep 10
+          
+          if docker ps | grep kalshi-trading-bot | grep -q "Up"; then
+            echo "✅ Dual-service deployment successful!"
+            echo ""
+            echo "🔗 **Access Points:**"
+            echo "📊 Dashboard: http://helloadrastea.synology.me:8501"
+            echo "🤖 Trading Bot: Running in background"
+            echo ""
+            echo "📋 **Container Status:**"
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep kalshi-trading-bot || echo "Status check failed"
+            echo ""
+            echo "📜 **Recent Logs:**"
+            docker logs --tail 20 kalshi-trading-bot 2>&1 || echo "No logs available yet"
+          else
+            echo "❌ Deployment verification failed"
+            echo ""
+            echo "🔍 **Debugging Info:**"
+            echo "Container status:"
+            docker ps -a | grep kalshi-trading-bot || echo "No container found"
+            echo ""
+            echo "Full logs:"
+            docker logs kalshi-trading-bot 2>&1 || echo "No logs available"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== 🎉 Kalshi Trading Bot Deployment Completed Successfully ==="
 
   notify:
     name: Notify Results
