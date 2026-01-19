@@ -2,6 +2,7 @@
 Database manager for the Kalshi trading system.
 """
 
+import os
 import aiosqlite
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
