@@ -60,19 +60,19 @@ def launch_dashboard():
     print("✅ All requirements satisfied")
     print("🌐 Launching dashboard...")
     print()
-    print("📊 Open your browser and navigate to: http://localhost:8501")
+    print("📊 Dashboard will be accessible at: http://0.0.0.0:8501")
     print("⏹️ Press Ctrl+C to stop the dashboard")
     print()
     
     try:
-        # Launch Streamlit
+        # Launch Streamlit - bind to 0.0.0.0 for external/Docker access
         subprocess.run([
             sys.executable, 
             "-m", 
             "streamlit", 
             "run", 
             "trading_dashboard.py",
-            "--server.address", "localhost",
+            "--server.address", "0.0.0.0",
             "--server.port", "8501",
             "--server.headless", "true",
             "--browser.gatherUsageStats", "false"
