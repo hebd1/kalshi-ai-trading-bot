@@ -12,12 +12,12 @@ services:
     environment:
       # Kalshi API Configuration
       - KALSHI_API_KEY=${KALSHI_API_KEY}
-      - KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem
+      - KALSHI_PRIVATE_KEY=kalshi_private_key.pem
       - KALSHI_BASE_URL=${KALSHI_BASE_URL:-https://demo-api.kalshi.co}
       
       # Kalshi PROD API Configuration
       - KALSHI_API_KEY_PROD=${KALSHI_API_KEY_PROD}
-      - KALSHI_PRIVATE_KEY_PROD=/app/keys/kalshi_private_key.prod.pem
+      - KALSHI_PRIVATE_KEY_PROD=kalshi_private_key.prod.pem
       - KALSHI_BASE_URL_PROD=${KALSHI_BASE_URL_PROD:-https://api.elections.kalshi.com}
       
       # XAI API Configuration
@@ -41,9 +41,9 @@ services:
       # Mount shared data directory
       - /volume3/docker/kalshi-trading-bot/shared:/app/shared
       
-      # Mount API keys (read-only) - adjust path to your Synology location
-      - /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro
-      - /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro
+      # Mount API keys to top level project directory (read-only)
+      - /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/kalshi_private_key.pem:ro
+      - /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/kalshi_private_key.prod.pem:ro
       
       # Mount database directory (not the file itself to avoid mount issues)
       - /volume3/docker/kalshi-trading-bot/data:/app/data
