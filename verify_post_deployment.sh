@@ -99,8 +99,8 @@ fi
 
 # Check database file
 print_status "INFO" "Checking database file..."
-if docker exec kalshi-trading-bot test -f /app/trading_system.db; then
-    DB_SIZE=$(docker exec kalshi-trading-bot stat -c%s /app/trading_system.db)
+if docker exec kalshi-trading-bot test -f /app/data/trading_system.db; then
+    DB_SIZE=$(docker exec kalshi-trading-bot stat -c%s /app/data/trading_system.db)
     print_status "SUCCESS" "Database file exists (size: $DB_SIZE bytes)"
 else
     print_status "WARNING" "Database file not found (will be created on first run)"

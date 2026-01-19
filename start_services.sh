@@ -30,6 +30,24 @@ shutdown_handler() {
 # Set up signal handlers
 trap shutdown_handler SIGTERM SIGINT SIGQUIT
 
+# Initialize database if it doesn't exist
+echo "🔧 Checking database..."
+DB_PATH="${DB_PATH:-/app/data/trading_system.db}"
+
+# Create data directory if it doesn't exist
+mkdir -p "$(dirname "$DB_PATH")"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "📊 Database not found, initializing new database at $DB_PATH..."
+    python -c "import asyncio; from src.utils.database import DatabaseManager; asyncio.run(DatabaseManager('$DB_PATH').initialize())"
+    echo "✅ Database initialized successfully"
+else
+    echo "✅ Database found at $DB_PATH"
+    # Get database size
+    DB_SIZE=$(stat -f%z "$DB_PATH" 2>/dev/null || stat -c%s "$DB_PATH" 2>/dev/null || echo "unknown")
+    echo "   Database size: $DB_SIZE bytes"
+fi
+
 # Start the dashboard in the background
 echo "📊 Starting Streamlit dashboard on port 8501..."
 python launch_dashboard.py &

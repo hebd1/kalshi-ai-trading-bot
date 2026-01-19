@@ -45,8 +45,8 @@ services:
       - /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro
       - /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro
       
-      # Mount database
-      - /volume3/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db
+      # Mount database directory (not the file itself to avoid mount issues)
+      - /volume3/docker/kalshi-trading-bot/data:/app/data
     
     # Conservative resource limits for Synology NAS
     deploy:
@@ -74,7 +74,7 @@ networks:
 
 # Instructions for Synology NAS:
 # 1. Create directories on your NAS:
-#    mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys}
+#    mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys,data}
 #
 # 2. Copy your API key files to:
 #    /volume3/docker/kalshi-trading-bot/keys/
@@ -88,3 +88,5 @@ networks:
 #
 # 5. View logs:
 #    docker-compose -f docker-compose.synology.yml logs -f
+#
+# Note: Database will be created automatically at /volume3/docker/kalshi-trading-bot/data/trading_system.db

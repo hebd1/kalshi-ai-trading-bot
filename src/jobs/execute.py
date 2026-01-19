@@ -195,7 +195,7 @@ async def place_sell_limit_order(
             "side": side,
             "action": "sell",  # We're selling our existing position
             "count": position.quantity,
-            "type": "limit"
+            "type_": "limit"
         }
         
         # Add the appropriate price parameter based on what we're selling
@@ -294,13 +294,18 @@ async def place_profit_taking_orders(
                     continue
                 
                 # Get current price based on position side
-                if position.side == "YES":
-                    current_price = market_data.get('yes_price', 0) / 100  # Convert cents to dollars
-                else:
-                    current_price = market_data.get('no_price', 0) / 100
+                # API returns yes_bid/no_bid, not yes_price/no_price
+                yes_bid = market_data.get('yes_bid', 0)
+                no_bid = market_data.get('no_bid', 0)
+                last_price = market_data.get('last_price', 50)
                 
-                # Calculate current profit
-                if current_price > 0:
+                if position.side == "YES":
+                    current_price = (yes_bid if yes_bid > 0 else last_price) / 100  # Convert cents to dollars
+                else:
+                    current_price = (no_bid if no_bid > 0 else (100 - last_price)) / 100
+                
+                # Calculate current profit - guard against division by zero
+                if current_price > 0 and position.entry_price > 0:
                     profit_pct = (current_price - position.entry_price) / position.entry_price
                     unrealized_pnl = (current_price - position.entry_price) * position.quantity
                     
@@ -382,13 +387,18 @@ async def place_stop_loss_orders(
                     continue
                 
                 # Get current price based on position side
-                if position.side == "YES":
-                    current_price = market_data.get('yes_price', 0) / 100
-                else:
-                    current_price = market_data.get('no_price', 0) / 100
+                # API returns yes_bid/no_bid, not yes_price/no_price
+                yes_bid = market_data.get('yes_bid', 0)
+                no_bid = market_data.get('no_bid', 0)
+                last_price = market_data.get('last_price', 50)
                 
-                # Calculate current loss
-                if current_price > 0:
+                if position.side == "YES":
+                    current_price = (yes_bid if yes_bid > 0 else last_price) / 100
+                else:
+                    current_price = (no_bid if no_bid > 0 else (100 - last_price)) / 100
+                
+                # Calculate current loss - guard against division by zero
+                if current_price > 0 and position.entry_price > 0:
                     loss_pct = (current_price - position.entry_price) / position.entry_price
                     unrealized_pnl = (current_price - position.entry_price) * position.quantity
                     

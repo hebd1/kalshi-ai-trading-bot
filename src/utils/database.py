@@ -126,8 +126,15 @@ class LLMQuery:
 class DatabaseManager(TradingLoggerMixin):
     """Manages database operations for the trading system."""
 
-    def __init__(self, db_path: str = "trading_system.db"):
-        """Initialize database connection."""
+    def __init__(self, db_path: str = None):
+        """Initialize database connection.
+        
+        Args:
+            db_path: Path to database file. If None, uses DB_PATH env var or defaults to 'trading_system.db'
+        """
+        if db_path is None:
+            # Check environment variable first (for Docker), then use default
+            db_path = os.getenv("DB_PATH", "trading_system.db")
         self.db_path = db_path
         self.logger.info("Initializing database manager", db_path=db_path)
 

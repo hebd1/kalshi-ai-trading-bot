@@ -35,10 +35,11 @@ RUN chmod +x /app/start_services.sh
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV DB_PATH=/app/data/trading_system.db
 
-# Health check
+# Health check - check if database directory exists and is writable
 HEALTHCHECK --interval=5m --timeout=30s --start-period=30s --retries=3 \
-    CMD python -c "import sqlite3; db = sqlite3.connect('/app/trading_system.db'); db.close(); print('Health check passed')" || exit 1
+    CMD python -c "import os; db_path='${DB_PATH:-/app/data/trading_system.db}'; os.makedirs(os.path.dirname(db_path), exist_ok=True); import sqlite3; db = sqlite3.connect(db_path); db.close(); print('Health check passed')" || exit 1
 
 # Expose dashboard port
 EXPOSE 8501

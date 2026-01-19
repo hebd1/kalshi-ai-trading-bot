@@ -117,12 +117,12 @@ Before first deployment, ensure these directories exist on your NAS:
 ssh deimos@helloadrastea.synology.me -p 2222
 
 # Create directory structure
-sudo mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys}
+sudo mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys,data}
 
 # Set permissions
 sudo chown -R 1000:1000 /volume3/docker/kalshi-trading-bot
 sudo chmod 755 /volume3/docker/kalshi-trading-bot
-sudo chmod 777 /volume3/docker/kalshi-trading-bot/{logs,shared}
+sudo chmod 777 /volume3/docker/kalshi-trading-bot/{logs,shared,data}
 sudo chmod 755 /volume3/docker/kalshi-trading-bot/keys
 ```
 
@@ -306,7 +306,7 @@ SSH into your Synology NAS:
 ssh admin@your-nas-ip
 
 # Create directory structure
-mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys}
+mkdir -p /volume3/docker/kalshi-trading-bot/{logs,shared,keys,data}
 
 # Navigate to the directory
 cd /volume3/docker/kalshi-trading-bot
@@ -388,7 +388,7 @@ DOCKER_USERNAME=yourusername ./docker-run.sh
      - Add: `/volume3/docker/kalshi-trading-bot/logs` → `/app/logs`
      - Add: `/volume3/docker/kalshi-trading-bot/shared` → `/app/shared`
      - Add: `/volume3/docker/kalshi-trading-bot/keys` → `/app/keys` (Read-only)
-     - Add: `/volume3/docker/kalshi-trading-bot/trading_system.db` → `/app/trading_system.db`
+     - Add: `/volume3/docker/kalshi-trading-bot/data` → `/app/data`
    - **Environment Variables**:
      - `KALSHI_API_KEY`: your_demo_key
      - `KALSHI_API_KEY_PROD`: your_prod_key
@@ -397,6 +397,7 @@ DOCKER_USERNAME=yourusername ./docker-run.sh
      - `KALSHI_PRIVATE_KEY_PROD`: /app/keys/kalshi_private_key.prod.pem
      - `PYTHONUNBUFFERED`: 1
      - `TZ`: America/Denver
+     - `DB_PATH`: /app/data/trading_system.db
 7. Click **Apply** and **Start**
 
 ## 🔍 Monitoring & Management
