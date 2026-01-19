@@ -775,8 +775,10 @@ class UnifiedAdvancedTradingSystem:
         Get comprehensive system performance summary.
         """
         try:
-            # Get individual strategy performance
-            mm_performance = self.market_maker.get_performance_summary()
+            # Get individual strategy performance (only if initialized)
+            mm_performance = {}
+            if hasattr(self, 'market_maker') and self.market_maker:
+                mm_performance = self.market_maker.get_performance_summary()
             
             return {
                 'system_status': 'active',
