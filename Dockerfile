@@ -10,10 +10,12 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file and install Python dependencies first
+# Copy requirements files and install Python dependencies first
 COPY requirements.txt /app/
+COPY dashboard_requirements.txt /app/
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r dashboard_requirements.txt
 
 # Create necessary directory structure
 RUN mkdir -p /app/logs /app/shared /app/data /app/keys
