@@ -17,7 +17,7 @@ class APIConfig:
     """API configuration settings."""
     use_live_env: bool = False  # Flag to determine which environment to use
     kalshi_api_key: str = field(default_factory=lambda: os.getenv("KALSHI_API_KEY", ""))
-    kalshi_private_key: str = field(default_factory=lambda: os.getenv("KALSHI_PRIVATE_KEY", "kalshi_private_key.pem"))
+    kalshi_private_key: str = field(default_factory=lambda: os.getenv("KALSHI_PRIVATE_KEY", "keys/kalshi_private_key.pem"))
     kalshi_base_url: str = field(default_factory=lambda: os.getenv("KALSHI_BASE_URL", "https://demo-api.kalshi.co"))
     openai_api_key: str = field(default_factory=lambda: os.getenv("OPENAI_API_KEY", ""))
     xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""))
@@ -34,12 +34,12 @@ class APIConfig:
         if use_live:
             # Use PROD credentials for live trading
             self.kalshi_api_key = os.getenv("KALSHI_API_KEY_PROD", "")
-            self.kalshi_private_key = os.getenv("KALSHI_PRIVATE_KEY_PROD", "kalshi_private_key.prod.pem")
+            self.kalshi_private_key = os.getenv("KALSHI_PRIVATE_KEY_PROD", "keys/kalshi_private_key.prod.pem")
             self.kalshi_base_url = os.getenv("KALSHI_BASE_URL_PROD", "https://api.elections.kalshi.com")
         else:
             # Use TEST/demo credentials for paper trading
             self.kalshi_api_key = os.getenv("KALSHI_API_KEY", "")
-            self.kalshi_private_key = os.getenv("KALSHI_PRIVATE_KEY", "kalshi_private_key.pem")
+            self.kalshi_private_key = os.getenv("KALSHI_PRIVATE_KEY", "keys/kalshi_private_key.pem")
             self.kalshi_base_url = os.getenv("KALSHI_BASE_URL", "https://demo-api.kalshi.co")
 
 

@@ -35,6 +35,56 @@ Markets (Kalshi) → Ingest → Filter → Decide (AI) → Execute → Track →
                               Dashboard (Streamlit)
 ```
 
+## 🚨 AI Agent Guidelines
+
+### Documentation Practices
+
+**DO NOT create unnecessary markdown files.** When making changes or analyzing the system:
+- ❌ Do NOT create summary files like `CHANGES.md`, `ANALYSIS.md`, `SUMMARY.md` unless explicitly requested
+- ❌ Do NOT create documentation for every small change or analysis
+- ✅ Make changes directly to code and existing documentation
+- ✅ Provide concise summaries in responses, not separate files
+- ✅ Update relevant existing documentation (README.md, etc.) only when necessary
+
+### Production Log Analysis
+
+**The bot runs in production on remote host `adrastea`.** When asked to analyze logs or performance:
+
+1. **First, pull logs from production:**
+   ```bash
+   ssh adrastea "docker logs kalshi-trading-bot --tail 500" > /tmp/production_logs.txt
+   ```
+
+2. **Copy database for analysis (optional):**
+   ```bash
+   ssh adrastea "docker exec kalshi-trading-bot cat /app/data/trading_system.db" > /tmp/production_db.db
+   ```
+
+3. **Then analyze the pulled logs/data locally** - don't analyze stale local logs
+
+**Container details:**
+- Host: `adrastea` (accessible via SSH)
+- Container name: `kalshi-trading-bot`
+- Log location: Docker container logs
+- Database: `/app/data/trading_system.db` (inside container)
+- Dashboard: Exposed on port 8501
+
+**Quick commands:**
+```bash
+# View live logs
+ssh adrastea "docker logs -f kalshi-trading-bot"
+
+# Check container status
+ssh adrastea "docker ps | grep kalshi-trading-bot"
+
+# View recent errors
+ssh adrastea "docker logs kalshi-trading-bot --tail 100 | grep ERROR"
+
+# Copy latest database
+ssh adrastea "docker cp kalshi-trading-bot:/app/data/trading_system.db /tmp/trading_system.db" && \
+  scp adrastea:/tmp/trading_system.db /tmp/production_db.db
+```
+
 ## Critical Patterns & Conventions
 
 ### 1. Environment Configuration (PROD vs DEMO)
