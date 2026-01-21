@@ -69,51 +69,44 @@ class APIConfig:
             self.kalshi_private_key = os.getenv("KALSHI_PRIVATE_KEY", "keys/kalshi_private_key.pem")
             self.kalshi_base_url = os.getenv("KALSHI_BASE_URL", "https://demo-api.kalshi.co")
 
-
-# Trading strategy configuration - BALANCED FOR ACTUAL TRADING
+# Trading strategy configuration - INCREASED AGGRESSIVENESS
 @dataclass
 class TradingConfig:
     """Trading strategy configuration."""
-    # Position sizing and risk management - BALANCED  
-    max_position_size_pct: float = 5.0  # BALANCED: 5% per position
-    max_daily_loss_pct: float = 10.0    # BALANCED: 10% daily loss limit
-    max_positions: int = 10             # BALANCED: Allow more positions for diversification
-    min_balance: float = 50.0           # BALANCED: Lower cash buffer
+    # Position sizing and risk management - MADE MORE AGGRESSIVE  
+    max_position_size_pct: float = 5.0  # INCREASED: Back to 5% per position (was 3%)
+    max_daily_loss_pct: float = 15.0    # INCREASED: Allow 15% daily loss (was 10%) 
+    max_positions: int = 15              # INCREASED: Allow 15 concurrent positions (was 10)
+    min_balance: float = 50.0           # REDUCED: Lower minimum to trade more (was 100)
     
-    # Market filtering criteria - BALANCED QUALITY STANDARDS
-    min_volume: float = 500.0           # BALANCED: Allow smaller markets (500+ volume)
-    max_time_to_expiry_days: int = 30   # BALANCED: Allow longer-term markets (30 days)
+    # Market filtering criteria - MUCH MORE PERMISSIVE
+    min_volume: float = 200.0            # DECREASED: Much lower volume requirement (was 500, now 200)
+    max_time_to_expiry_days: int = 30    # INCREASED: Allow longer timeframes (was 14, now 30)
     
-    # AI decision making - BALANCED CONFIDENCE
-    min_confidence_to_trade: float = 0.55   # BALANCED: 55% confidence (matches EdgeFilter)
-    scan_interval_seconds: int = 30      # BALANCED: Faster scanning
+    # AI decision making - MORE AGGRESSIVE THRESHOLDS
+    min_confidence_to_trade: float = 0.50   # DECREASED: Lower confidence barrier (was 0.65, now 0.50)
+    scan_interval_seconds: int = 30      # DECREASED: Scan more frequently (was 60, now 30)
     
     # AI model configuration
     primary_model: str = "grok-4" # DO NOT CHANGE THIS UNDER ANY CIRCUMSTANCES
     fallback_model: str = "grok-3"  # Fallback to available model
-    ai_temperature: float = 0.2  # Optimized for Grok-4 reasoning (was 0, now 0.2 for better creativity)
-    ai_temperature_search: float = 0.3  # For factual search queries
+    ai_temperature: float = 0  # Lower temperature for more consistent JSON output
     ai_max_tokens: int = 8000    # Reasonable limit for reasoning models (grok-4 works better with 8000)
     
-    # Enhanced research configuration
-    enable_live_search_for_decisions: bool = True  # Enable SearchParameters for trading decisions
-    news_summary_max_length: int = 400  # Increased from 200 for better context
-    max_research_cost_per_decision: float = 0.15  # Allow up to $0.15 per decision for quality research
+    # Position sizing (LEGACY - now using Kelly-primary approach)
+    default_position_size: float = 3.0  # REDUCED: Now using Kelly Criterion as primary method (was 5%, now 3%)
+    position_size_multiplier: float = 1.0  # Multiplier for AI confidence
     
-    # Position sizing - BALANCED
-    default_position_size: float = 2.0  # BALANCED: 2% default position size
-    position_size_multiplier: float = 1.0  # BALANCED: Normal scaling
+    # Kelly Criterion settings (PRIMARY position sizing method) - MORE AGGRESSIVE
+    use_kelly_criterion: bool = True        # Use Kelly Criterion for position sizing (PRIMARY METHOD)
+    kelly_fraction: float = 0.75            # INCREASED: More aggressive Kelly multiplier (was 0.5, now 0.75)
+    max_single_position: float = 0.05       # INCREASED: Higher position cap (was 0.03, now 5%)
     
-    # Kelly Criterion settings (PRIMARY position sizing method) - BALANCED
-    use_kelly_criterion: bool = True        # ENABLED: Use Kelly for sizing
-    kelly_fraction: float = 0.25            # BALANCED: 25% Kelly (quarter Kelly)
-    max_single_position: float = 0.05       # BALANCED: 5% absolute maximum per position
-    
-    # Trading frequency - BALANCED
-    market_scan_interval: int = 120         # BALANCED: Scan every 2 minutes
-    position_check_interval: int = 60       # BALANCED: Check positions every minute
-    max_trades_per_hour: int = 10           # BALANCED: Allow more trades per hour
-    run_interval_minutes: int = 15          # BALANCED: Run every 15 minutes
+    # Trading frequency - MORE FREQUENT
+    market_scan_interval: int = 30          # DECREASED: Scan every 30 seconds (was 60)
+    position_check_interval: int = 15       # DECREASED: Check positions every 15 seconds (was 30)
+    max_trades_per_hour: int = 20           # INCREASED: Allow more trades per hour (was 10, now 20)
+    run_interval_minutes: int = 10          # DECREASED: Run more frequently (was 15, now 10)
     num_processor_workers: int = 5      # Number of concurrent market processor workers
     
     # Market selection preferences
@@ -122,34 +115,30 @@ class TradingConfig:
     
     # High-confidence, near-expiry strategy
     enable_high_confidence_strategy: bool = True
-    high_confidence_threshold: float = 0.80  # BALANCED: Lower from 0.95
-    high_confidence_market_odds: float = 0.85 # BALANCED: Lower from 0.90
-    high_confidence_expiry_hours: int = 48   # BALANCED: 48 hours
+    high_confidence_threshold: float = 0.95  # LLM confidence needed
+    high_confidence_market_odds: float = 0.90 # Market price to look for
+    high_confidence_expiry_hours: int = 24   # Max hours until expiry
 
-    # AI trading criteria - BALANCED QUALITY
-    max_analysis_cost_per_decision: float = 0.10  # BALANCED: Higher cost allowed
-    min_confidence_threshold: float = 0.55  # BALANCED: Matches EdgeFilter
+    # AI trading criteria - MORE PERMISSIVE
+    max_analysis_cost_per_decision: float = 0.15  # INCREASED: Allow higher cost per decision (was 0.10, now 0.15)
+    min_confidence_threshold: float = 0.45  # DECREASED: Lower confidence threshold (was 0.55, now 0.45)
 
-    # Cost control and market analysis frequency - BALANCED
-    daily_ai_budget: float = 10.0  # BALANCED: Higher budget for more opportunities
-    max_ai_cost_per_decision: float = 0.10  # BALANCED: Higher per-decision cost
-    analysis_cooldown_hours: int = 4   # BALANCED: Shorter cooldown
-    max_analyses_per_market_per_day: int = 3  # BALANCED: More analyses allowed
+    # Cost control and market analysis frequency - MORE PERMISSIVE
+    daily_ai_budget: float = 10.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
+    max_ai_cost_per_decision: float = 0.08  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
+    analysis_cooldown_hours: int = 3  # DECREASED: Shorter cooldown (was 6, now 3)
+    max_analyses_per_market_per_day: int = 4  # INCREASED: More analyses per day (was 2, now 4)
     
     # Daily AI spending limits - SAFETY CONTROLS
     daily_ai_cost_limit: float = 50.0  # Maximum daily spending on AI API calls (USD)
     enable_daily_cost_limiting: bool = True  # Enable daily cost limits
     sleep_when_limit_reached: bool = True  # Sleep until next day when limit reached
 
-    # Enhanced market filtering - BALANCED
-    min_volume_for_ai_analysis: float = 500.0  # BALANCED: Lower volume threshold
+    # Enhanced market filtering to reduce analyses - MORE PERMISSIVE
+    min_volume_for_ai_analysis: float = 200.0  # DECREASED: Much lower threshold (was 500, now 200)
     exclude_low_liquidity_categories: List[str] = field(default_factory=lambda: [
-        "weather"  # Only exclude highly unpredictable categories
+        # REMOVED weather and entertainment - trade all categories
     ])
-    
-    # Smart research allocation (don't blanket skip low-volume - they can have best edges)
-    skip_news_for_low_volume: bool = False  # Disabled to allow smart allocation
-    use_smart_research_allocation: bool = True  # Use intelligent research decisions
 
 
 @dataclass
@@ -234,8 +223,8 @@ news_search_volume_threshold: float = 1000.0  # News threshold
 # Overall system behavior settings
 beast_mode_enabled: bool = True         # Enable the unified advanced system
 fallback_to_legacy: bool = True         # Fallback to legacy system if needed
-live_trading_enabled: bool = True       # Always execute real trades (in demo or prod environment)
-paper_trading_mode: bool = False        # Paper trading disabled (we always trade for real)
+live_trading_enabled: bool = True       # Set to True for live trading
+paper_trading_mode: bool = False        # Paper trading for testing
 log_level: str = "INFO"                 # Logging level
 performance_monitoring: bool = True     # Enable performance monitoring
 

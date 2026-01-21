@@ -185,13 +185,24 @@ def load_performance_data():
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
                             
-                            # Determine current price with fallback to last_price
+                            # Determine current price for valuation (use BID price for liquidation value)
+                            # Fallback to last_price if no bid is available
                             if position_count > 0:  # YES position
-                                current_price = float(market_info.get('yes_price', 
-                                    market_info.get('last_price', 50)) / 100)
+                                # Use YES bid (what we can sell for)
+                                bid_price = market_info.get('yes_bid', 0)
+                                if bid_price > 0:
+                                    current_price = float(bid_price) / 100
+                                else:
+                                    current_price = float(market_info.get('last_price', 50)) / 100
                             else:  # NO position
-                                current_price = float(market_info.get('no_price',
-                                    100 - market_info.get('last_price', 50)) / 100)
+                                # Use NO bid (what we can sell for)
+                                bid_price = market_info.get('no_bid', 0)
+                                if bid_price > 0:
+                                    current_price = float(bid_price) / 100
+                                else:
+                                    # For NO positions, last_price is usually YES price, so imply NO price
+                                    last_yes = market_info.get('last_price', 50)
+                                    current_price = float(100 - last_yes) / 100
                             
                             position_dict['current_price'] = current_price
                             
@@ -282,11 +293,17 @@ def load_system_health():
         kalshi_client = KalshiClient()
         
         async def get_health():
-            # Get available cash
+            # Get available cash and portfolio value from Kalshi API
+            # Note: balance is in cents
             balance_response = await kalshi_client.get_balance()
             available_cash = balance_response.get('balance', 0) / 100
             
-            # Get current positions to calculate total portfolio value
+            # Kalshi API returns 'portfolio_value' which seems to be position equity?
+            # Let's verify if 'portfolio_value' from API matches our calc or is total equity
+            # Based on testing: balance=176834 ($1768.34), portfolio_value=37245 ($372.45)
+            # So 'portfolio_value' is likely the equity in positions.
+            
+            # Get current positions to calculate/verify total portfolio value
             positions_response = await kalshi_client.get_positions()
             market_positions = positions_response.get('market_positions', [])
             
@@ -294,7 +311,18 @@ def load_system_health():
             # Only count positions with non-zero quantity
             positions_count = sum(1 for p in market_positions if p.get('position', 0) != 0)
             
-            # Calculate current value of all positions
+            # Calculate current value of all positions manually as well for verification
+            # But primarily rely on the robust calculation we added to load_performance_data
+            # Here we just need a quick sum for health metrics if load_performance_data hasn't run
+            
+            # NOTE: We will calculate 'total_portfolio_value' as Cash + Position Value
+            # Position Value will be calculated robustly in load_performance_data, but we need
+            # a value here. We can use the API's 'portfolio_value' if available, otherwise calc.
+            
+            api_position_value = balance_response.get('portfolio_value', 0) / 100
+            
+            # Calculate current value of all positions manually (as backup/verification)
+            manual_position_value = 0
             for position in market_positions:
                 try:
                     ticker = position.get('ticker')
@@ -307,19 +335,30 @@ def load_system_health():
                             market_info = market_data['market']
                             
                             # Determine if this is a YES or NO position and get current price
-                            # For Kalshi, positive position = YES, negative = NO
                             if position_count > 0:  # YES position
-                                current_price = market_info.get('yes_price', 50) / 100
+                                # Use BID if available, else last price
+                                bid_price = market_info.get('yes_bid', 0)
+                                if bid_price > 0:
+                                    current_price = float(bid_price) / 100
+                                else:
+                                    current_price = float(market_info.get('last_price', 50)) / 100
                             else:  # NO position  
-                                current_price = market_info.get('no_price', 50) / 100
+                                bid_price = market_info.get('no_bid', 0)
+                                if bid_price > 0:
+                                    current_price = float(bid_price) / 100
+                                else:
+                                    current_price = float(100 - market_info.get('last_price', 50)) / 100
                             
                             position_value = abs(position_count) * current_price
-                            total_position_value += position_value
+                            manual_position_value += position_value
                             
                 except Exception as e:
-                    # If we can't get market data for a position, skip it
                     print(f"Warning: Could not value position {ticker}: {e}")
                     continue
+            
+            # Use manual calculation as it matches load_performance_data logic (fallback to last price)
+            # The API's portfolio_value might strict bid/mark logic that shows 0 for illiquid
+            total_position_value = manual_position_value
             
             # Total portfolio value = cash + position values
             total_portfolio_value = available_cash + total_position_value

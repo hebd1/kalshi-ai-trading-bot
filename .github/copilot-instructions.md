@@ -52,12 +52,12 @@ Markets (Kalshi) → Ingest → Filter → Decide (AI) → Execute → Track →
 
 1. **First, pull logs from production:**
    ```bash
-   ssh adrastea "docker logs kalshi-trading-bot --tail 500" > /tmp/production_logs.txt
+   ssh adrastea "/usr/local/bin/docker logs kalshi-trading-bot --tail 500" > /tmp/production_logs.txt
    ```
 
 2. **Copy database for analysis (optional):**
    ```bash
-   ssh adrastea "docker exec kalshi-trading-bot cat /app/data/trading_system.db" > /tmp/production_db.db
+   ssh adrastea "/usr/local/bin/docker exec kalshi-trading-bot cat /app/data/trading_system.db" > /tmp/production_db.db
    ```
 
 3. **Then analyze the pulled logs/data locally** - don't analyze stale local logs
@@ -72,16 +72,16 @@ Markets (Kalshi) → Ingest → Filter → Decide (AI) → Execute → Track →
 **Quick commands:**
 ```bash
 # View live logs
-ssh adrastea "docker logs -f kalshi-trading-bot"
+ssh adrastea "/usr/local/bin/docker logs -f kalshi-trading-bot"
 
 # Check container status
-ssh adrastea "docker ps | grep kalshi-trading-bot"
+ssh adrastea "/usr/local/bin/docker ps | grep kalshi-trading-bot"
 
 # View recent errors
-ssh adrastea "docker logs kalshi-trading-bot --tail 100 | grep ERROR"
+ssh adrastea "/usr/local/bin/docker logs kalshi-trading-bot --tail 100 | grep ERROR"
 
 # Copy latest database
-ssh adrastea "docker cp kalshi-trading-bot:/app/data/trading_system.db /tmp/trading_system.db" && \
+ssh adrastea "/usr/local/bin/docker cp kalshi-trading-bot:/app/data/trading_system.db /tmp/trading_system.db" && \
   scp adrastea:/tmp/trading_system.db /tmp/production_db.db
 ```
 
