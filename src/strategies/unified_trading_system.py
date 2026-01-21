@@ -160,6 +160,8 @@ class UnifiedAdvancedTradingSystem:
             available_cash = balance_response.get('balance', 0) / 100  # Convert cents to dollars
             
             # Get current positions to calculate total portfolio value
+            # NOTE: This includes BOTH tracked and untracked positions for accurate capital allocation
+            # Untracked positions (legacy/pre-bot) must be included in risk calculations and position limits
             positions_response = await self.kalshi_client.get_positions()
             positions = positions_response.get('positions', []) if isinstance(positions_response, dict) else []
             total_position_value = 0

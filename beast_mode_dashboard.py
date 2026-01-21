@@ -21,6 +21,7 @@ Usage:
 import asyncio
 import argparse
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import asdict
@@ -51,7 +52,10 @@ class BeastModeDashboard:
     - Cost analysis and budget tracking
     """
     
-    def __init__(self):
+    def __init__(self, use_live: bool = True):
+        # Configure for production environment by default
+        settings.api.configure_environment(use_live=use_live)
+        
         self.db_manager = DatabaseManager()
         self.kalshi_client = KalshiClient()
         self.xai_client = XAIClient()
@@ -434,7 +438,9 @@ async def main():
     
     args = parser.parse_args()
     
-    dashboard = BeastModeDashboard()
+    # Default to production environment
+    use_live = os.getenv('TRADING_MODE', 'live').lower() in ['live', 'prod', 'production']
+    dashboard = BeastModeDashboard(use_live=use_live)
     
     try:
         if args.summary:

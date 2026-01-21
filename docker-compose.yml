@@ -79,6 +79,22 @@ services:
     command: ["python", "beast_mode_dashboard.py"]
     
     environment:
+      # Trading Mode (must match main bot)
+      - TRADING_MODE=${TRADING_MODE:-demo}
+      
+      # Kalshi API Configuration (Demo/Test)
+      - KALSHI_API_KEY=${KALSHI_API_KEY}
+      - KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem
+      - KALSHI_BASE_URL=${KALSHI_BASE_URL:-https://demo-api.kalshi.co}
+      
+      # Kalshi PROD API Configuration (for live trading)
+      - KALSHI_API_KEY_PROD=${KALSHI_API_KEY_PROD}
+      - KALSHI_PRIVATE_KEY_PROD=/app/keys/kalshi_private_key.prod.pem
+      - KALSHI_BASE_URL_PROD=${KALSHI_BASE_URL_PROD:-https://api.elections.kalshi.com}
+      
+      # XAI (Grok) API Configuration
+      - XAI_API_KEY=${XAI_API_KEY}
+      
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
       - TZ=${TZ:-America/Denver}
@@ -87,6 +103,9 @@ services:
       - ./logs:/app/logs
       - ./shared:/app/shared
       - ./trading_system.db:/app/trading_system.db:ro
+      # Mount API keys for Kalshi access
+      - ./kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro
+      - ./kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro
     
     ports:
       - "8501:8501"  # Streamlit default port

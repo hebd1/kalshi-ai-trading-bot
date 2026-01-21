@@ -28,6 +28,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.database import DatabaseManager
 from src.clients.kalshi_client import KalshiClient
+from src.config.settings import settings
+
+# Configure for PRODUCTION environment (not demo)
+settings.api.configure_environment(use_live=True)
 
 # Configure Streamlit page
 st.set_page_config(
