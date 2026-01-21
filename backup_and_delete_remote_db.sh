@@ -14,6 +14,9 @@ BACKUP_DIR="./backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILENAME="trading_system_backup_${TIMESTAMP}.db"
 
+# Synology Docker path (update if different on your system)
+DOCKER_CMD="/usr/local/bin/docker"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,41 +31,53 @@ echo ""
 # Create backup directory if it doesn't exist
 mkdir -p "$BACKUP_DIR"
 
-# Step 1: Check if container is running
+# Step 1: Check container status
 echo -e "${YELLOW}[1/5] Checking container status...${NC}"
-CONTAINER_STATUS=$(ssh $REMOTE_HOST "docker ps --filter name=$CONTAINER_NAME --format '{{.Status}}'" 2>/dev/null || echo "NOT_FOUND")
+CONTAINER_STATUS=$(ssh $REMOTE_HOST "$DOCKER_CMD ps --filter name=$CONTAINER_NAME --format '{{.Status}}'" 2>/dev/null || echo "")
 
-if [[ "$CONTAINER_STATUS" == "NOT_FOUND" ]] || [[ -z "$CONTAINER_STATUS" ]]; then
-    echo -e "${RED}❌ Container '$CONTAINER_NAME' is not running on $REMOTE_HOST${NC}"
+# Check if container exists (running or stopped)
+CONTAINER_EXISTS=$(ssh $REMOTE_HOST "$DOCKER_CMD ps -a --filter name=$CONTAINER_NAME --format '{{.Names}}'" 2>/dev/null)
+
+if [[ -z "$CONTAINER_EXISTS" ]]; then
+    echo -e "${RED}❌ Container '$CONTAINER_NAME' not found on $REMOTE_HOST${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ Container is running: $CONTAINER_STATUS${NC}"
+if [[ -n "$CONTAINER_STATUS" ]]; then
+    echo -e "${GREEN}✅ Container is running: $CONTAINER_STATUS${NC}"
+    CONTAINER_RUNNING=true
+else
+    echo -e "${YELLOW}⚠️  Container exists but is stopped${NC}"
+    CONTAINER_RUNNING=false
+fi
 echo ""
 
-# Step 2: Check if database exists
+# Step 2: Check if database exists (using host filesystem path)
 echo -e "${YELLOW}[2/5] Checking if database exists...${NC}"
-DB_EXISTS=$(ssh $REMOTE_HOST "docker exec $CONTAINER_NAME test -f $REMOTE_DB_PATH && echo 'yes' || echo 'no'" 2>/dev/null)
+
+# Find the database on the host filesystem
+HOST_DB_PATH="/volume3/docker/kalshi-trading-bot/data"
+DB_EXISTS=$(ssh $REMOTE_HOST "test -f $HOST_DB_PATH/trading_system.db && echo 'yes' || echo 'no'" 2>/dev/null)
 
 if [[ "$DB_EXISTS" != "yes" ]]; then
-    echo -e "${RED}❌ Database not found at $REMOTE_DB_PATH${NC}"
+    echo -e "${RED}❌ Database not found at $HOST_DB_PATH/trading_system.db${NC}"
     exit 1
 fi
 
-# Get database size
-DB_SIZE=$(ssh $REMOTE_HOST "docker exec $CONTAINER_NAME ls -lh $REMOTE_DB_PATH | awk '{print \$5}'")
+# Get database size from host filesystem
+DB_SIZE=$(ssh $REMOTE_HOST "ls -lh $HOST_DB_PATH/trading_system.db | awk '{print \$5}'")
 echo -e "${GREEN}✅ Database found (Size: $DB_SIZE)${NC}"
 echo ""
 
 # Step 3: Create backup
 echo -e "${YELLOW}[3/5] Creating backup...${NC}"
-echo "Copying database from container to remote host..."
+echo "Copying database from host to temp location..."
 
-# Copy from container to remote host temp location
-ssh $REMOTE_HOST "docker cp $CONTAINER_NAME:$REMOTE_DB_PATH /tmp/$BACKUP_FILENAME"
+# Copy from host filesystem to remote temp location
+ssh $REMOTE_HOST "cp $HOST_DB_PATH/trading_system.db /tmp/$BACKUP_FILENAME"
 
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to copy database from container${NC}"
+    echo -e "${RED}❌ Failed to copy database from host${NC}"
     exit 1
 fi
 
@@ -112,44 +127,53 @@ fi
 echo ""
 echo -e "${YELLOW}[5/5] Deleting database from remote container...${NC}"
 
-# Stop the container first (optional but safer)
-read -p "Stop the container before deletion? (y/n, default: y): " STOP_CONTAINER
-STOP_CONTAINER=${STOP_CONTAINER:-y}
+# Find the volume mount path on the host
+echo "Finding database location on host..."
+HOST_DB_PATH=$(ssh $REMOTE_HOST "$DOCKER_CMD inspect $CONTAINER_NAME --format '{{range .Mounts}}{{if eq .Destination \"/app/data\"}}{{.Source}}{{end}}{{end}}'")
 
-if [[ "$STOP_CONTAINER" == "y" ]] || [[ "$STOP_CONTAINER" == "Y" ]]; then
-    echo "Stopping container..."
-    ssh $REMOTE_HOST "docker stop $CONTAINER_NAME"
-    echo -e "${GREEN}✅ Container stopped${NC}"
+if [[ -z "$HOST_DB_PATH" ]]; then
+    echo -e "${YELLOW}⚠️  Could not auto-detect volume mount path${NC}"
+    echo "Using known path for this system: /volume3/docker/kalshi-trading-bot/data"
+    HOST_DB_PATH="/volume3/docker/kalshi-trading-bot/data"
 fi
 
-# Delete the database file
-echo "Deleting database file..."
-ssh $REMOTE_HOST "docker exec $CONTAINER_NAME rm -f $REMOTE_DB_PATH"
+echo "Database location on host: $HOST_DB_PATH"
+echo "Full database path: $HOST_DB_PATH/trading_system.db"
 
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Failed to delete database${NC}"
-    if [[ "$STOP_CONTAINER" == "y" ]] || [[ "$STOP_CONTAINER" == "Y" ]]; then
-        echo "Restarting container..."
-        ssh $REMOTE_HOST "docker start $CONTAINER_NAME"
+# Verify the database file exists before attempting deletion
+if ssh $REMOTE_HOST "test -f $HOST_DB_PATH/trading_system.db"; then
+    echo "✓ Database file confirmed at: $HOST_DB_PATH/trading_system.db"
+    echo "Deleting database file from host filesystem..."
+    echo "✓ Database file confirmed at: $HOST_DB_PATH/trading_system.db"
+    echo "Deleting database file from host filesystem..."
+    ssh $REMOTE_HOST "rm -f $HOST_DB_PATH/trading_system.db"
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ Failed to delete database from host${NC}"
+        exit 1
     fi
+    
+    # Verify deletion
+    if ssh $REMOTE_HOST "test -f $HOST_DB_PATH/trading_system.db"; then
+        echo -e "${RED}❌ Database still exists after deletion attempt${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Database successfully deleted from host filesystem${NC}"
+else
+    echo -e "${RED}❌ Database file not found at: $HOST_DB_PATH/trading_system.db${NC}"
     exit 1
 fi
 
-# Verify deletion
-DB_STILL_EXISTS=$(ssh $REMOTE_HOST "docker exec $CONTAINER_NAME test -f $REMOTE_DB_PATH && echo 'yes' || echo 'no'" 2>/dev/null || echo "no")
-
-if [[ "$DB_STILL_EXISTS" == "yes" ]]; then
-    echo -e "${RED}❌ Database still exists after deletion attempt${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✅ Database successfully deleted from remote container${NC}"
 echo ""
 
-# Restart container if it was stopped
-if [[ "$STOP_CONTAINER" == "y" ]] || [[ "$STOP_CONTAINER" == "Y" ]]; then
+# Restart the container to ensure clean state
+read -p "Restart the container now? (y/n, default: y): " RESTART_CONTAINER
+RESTART_CONTAINER=${RESTART_CONTAINER:-y}
+
+if [[ "$RESTART_CONTAINER" == "y" ]] || [[ "$RESTART_CONTAINER" == "Y" ]]; then
     echo "Restarting container..."
-    ssh $REMOTE_HOST "docker start $CONTAINER_NAME"
+    ssh $REMOTE_HOST "$DOCKER_CMD restart $CONTAINER_NAME"
     echo -e "${GREEN}✅ Container restarted${NC}"
 fi
 
