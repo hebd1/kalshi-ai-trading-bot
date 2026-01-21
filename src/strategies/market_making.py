@@ -95,11 +95,11 @@ class AdvancedMarketMaker:
         self.logger = get_trading_logger("market_maker")
         
         # Market making parameters
-        self.min_spread = getattr(settings.trading, 'min_spread_for_making', 0.03)  # 3 cents minimum
-        self.max_spread = getattr(settings.trading, 'max_bid_ask_spread', 0.10)  # 10 cents maximum
+        self.min_spread = getattr(settings.trading, 'min_spread_for_making', 0.01)  # 1 cent minimum
+        self.max_spread = getattr(settings.trading, 'max_bid_ask_spread', 0.20)  # 20 cents maximum
         self.target_inventory = 0.0  # Neutral inventory target
         self.inventory_penalty = getattr(settings.trading, 'max_inventory_risk', 0.01)
-        self.volatility_multiplier = 2.0  # Volatility adjustment factor
+        self.volatility_multiplier = 1.0  # More aggressive volatility multiplier
         
         # Order management
         self.active_orders: Dict[str, List[LimitOrder]] = {}  # market_id -> orders

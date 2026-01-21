@@ -1085,17 +1085,18 @@ class DatabaseManager(TradingLoggerMixin):
 
     async def add_position(self, position: Position) -> Optional[int]:
         """
-        Adds a new position to the database, if one doesn't already exist for the same market and side.
+        Adds a new position to the database, or re-opens a closed one if it exists.
         
         Args:
             position: The position to add.
         
         Returns:
-            The ID of the newly inserted position, or None if a position already exists.
+            The ID of the position (new or updated), or None if an OPEN position already exists.
         """
-        existing_position = await self.get_position_by_market_and_side(position.market_id, position.side)
-        if existing_position:
-            self.logger.warning(f"Position already exists for market {position.market_id} and side {position.side}.")
+        # First check for OPEN position - if one exists, we shouldn't overwrite it blindly
+        existing_open_position = await self.get_position_by_market_and_side(position.market_id, position.side)
+        if existing_open_position:
+            self.logger.warning(f"Open position already exists for market {position.market_id} and side {position.side}.")
             return None
 
         async with aiosqlite.connect(self.db_path) as db:
@@ -1103,18 +1104,56 @@ class DatabaseManager(TradingLoggerMixin):
             # aiosqlite does not support dataclasses with datetime objects
             position_dict['timestamp'] = position.timestamp.isoformat()
 
-            cursor = await db.execute("""
-                INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, tracked, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
-                VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :tracked, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
-            """, position_dict)
-            await db.commit()
-            
-            # Set has_position to True for the market
-            await db.execute("UPDATE markets SET has_position = 1 WHERE market_id = ?", (position.market_id,))
-            await db.commit()
+            # Check if ANY position (even closed) exists for this market/side
+            cursor = await db.execute(
+                "SELECT id FROM positions WHERE market_id = ? AND side = ?", 
+                (position.market_id, position.side)
+            )
+            existing_row = await cursor.fetchone()
 
-            self.logger.info(f"Added position for market {position.market_id}", position_id=cursor.lastrowid)
-            return cursor.lastrowid
+            if existing_row:
+                # Update existing CLOSED position to re-open it
+                pos_id = existing_row[0]
+                self.logger.info(f"Re-opening existing closed position {pos_id} for {position.market_id}")
+                
+                await db.execute("""
+                    UPDATE positions SET
+                        entry_price = :entry_price,
+                        quantity = :quantity,
+                        timestamp = :timestamp,
+                        rationale = :rationale,
+                        confidence = :confidence,
+                        live = :live,
+                        status = :status,
+                        strategy = :strategy,
+                        tracked = :tracked,
+                        stop_loss_price = :stop_loss_price,
+                        take_profit_price = :take_profit_price,
+                        max_hold_hours = :max_hold_hours,
+                        target_confidence_change = :target_confidence_change
+                    WHERE id = :id
+                """, {**position_dict, 'id': pos_id})
+                await db.commit()
+                
+                # Update market status
+                await db.execute("UPDATE markets SET has_position = 1 WHERE market_id = ?", (position.market_id,))
+                await db.commit()
+                
+                return pos_id
+            else:
+                # Insert new position
+                cursor = await db.execute("""
+                    INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, tracked, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
+                    VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :tracked, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
+                """, position_dict)
+                await db.commit()
+                
+                # Set has_position to True for the market
+                await db.execute("UPDATE markets SET has_position = 1 WHERE market_id = ?", (position.market_id,))
+                await db.commit()
+
+                self.logger.info(f"Added position for market {position.market_id}", position_id=cursor.lastrowid)
+                return cursor.lastrowid
 
     async def get_open_positions(self) -> List[Position]:
         """Get all open positions."""

@@ -57,10 +57,16 @@ Markets (Kalshi) → Ingest → Filter → Decide (AI) → Execute → Track →
 
 2. **Copy database for analysis (optional):**
    ```bash
-   ssh adrastea "/usr/local/bin/docker exec kalshi-trading-bot cat /app/data/trading_system.db" > /tmp/production_db.db
+   ssh adrastea "/usr/local/bin/docker cp kalshi-trading-bot:/app/data/trading_system.db /tmp/trading_system.db" && \
+     scp adrastea:/tmp/trading_system.db /tmp/production_db.db
    ```
 
-3. **Then analyze the pulled logs/data locally** - don't analyze stale local logs
+3. **Use available inspection scripts to analyze the database:**
+   - `inspect_prod_db.py` - Verify positions table integrity and check for duplicates
+   - `inspect_activity.py` - Review recent analyses and trade logs
+   - `extract_grok_analysis.py` - Extract and review AI reasoning from logs
+
+4. **Then analyze the pulled logs/data locally** - don't analyze stale local logs
 
 **Container details:**
 - Host: `adrastea` (accessible via SSH)
