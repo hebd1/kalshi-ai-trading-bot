@@ -297,7 +297,14 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
             logger.info("No open positions to track.")
             return
 
-        logger.info(f"Found {len(open_positions)} open positions to track.")
+        # Count tracked vs untracked for visibility
+        tracked_count = sum(1 for pos in open_positions if getattr(pos, 'tracked', True))
+        untracked_count = len(open_positions) - tracked_count
+        
+        logger.info(
+            f"Found {len(open_positions)} open positions to track: "
+            f"{tracked_count} tracked (full P&L), {untracked_count} untracked (monitoring only)"
+        )
 
         exits_executed = 0
         for position in open_positions:
@@ -322,6 +329,8 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                     exit_levels = await calculate_dynamic_exit_levels(position)
                     
                     # Update position with exit strategy (this would need a new DB method)
+                # NOTE: Exit strategies apply to BOTH tracked and untracked positions
+                # Untracked positions still need stop losses, take profit, time-based exits for risk management
                     # For now, we'll apply them dynamically
                     position.stop_loss_price = exit_levels["stop_loss_price"]
                     position.take_profit_price = exit_levels["take_profit_price"] 

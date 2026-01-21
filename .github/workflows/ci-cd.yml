@@ -155,7 +155,7 @@ jobs:
             -v /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.pem:/app/keys/kalshi_private_key.pem:ro \
             -v /volume3/docker/kalshi-trading-bot/keys/kalshi_private_key.prod.pem:/app/keys/kalshi_private_key.prod.pem:ro \
             -v /volume3/docker/kalshi-trading-bot/.env:/app/.env:ro \
-            -v /volume3/docker/kalshi-trading-bot/trading_system.db:/app/trading_system.db:rw \
+            -v /volume3/docker/kalshi-trading-bot/data:/app/data:rw \
             -e PYTHONUNBUFFERED=1 \
             -e PYTHONPATH=/app \
             -e TZ=America/Denver \
