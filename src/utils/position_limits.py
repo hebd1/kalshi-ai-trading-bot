@@ -306,7 +306,7 @@ class PositionLimitsManager:
                     market_id=position.market_id,
                     side=position.side,
                     current_pnl=0.0,  # Could be calculated with real-time pricing
-                    confidence=position.confidence or 0.5,
+                    confidence=position.confidence if position.confidence is not None else 0.0,  # Use 0.0 for unknown (prioritizes for closure)
                     age_hours=age_hours,
                     priority_score=priority_score
                 )

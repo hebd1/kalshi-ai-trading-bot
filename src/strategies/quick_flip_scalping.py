@@ -262,13 +262,13 @@ REASON: [brief explanation]
                 if 'TARGET_PRICE:' in line:
                     try:
                         target_price = float(line.split(':')[1].strip())
-                    except:
-                        pass
+                    except ValueError as e:
+                        self.logger.warning(f"Failed to parse TARGET_PRICE from AI response: {e}")
                 elif 'CONFIDENCE:' in line:
                     try:
                         confidence = float(line.split(':')[1].strip())
-                    except:
-                        pass
+                    except ValueError as e:
+                        self.logger.warning(f"Failed to parse CONFIDENCE from AI response: {e}")
                 elif 'REASON:' in line:
                     reason = line.split(':', 1)[1].strip()
             

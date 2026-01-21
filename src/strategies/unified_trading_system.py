@@ -186,8 +186,9 @@ class UnifiedAdvancedTradingSystem:
                                                or (100 - market_info.get('last_price', 50))) / 100
                             position_value = abs(quantity) * current_price
                             total_position_value += position_value
-                        except:
-                            # If we can't get market data, estimate at entry price
+                        except Exception as e:
+                            # If we can't get market data, use conservative estimate
+                            self.logger.warning(f"Failed to get market data for {market_id} during portfolio calculation: {e}")
                             total_position_value += abs(quantity) * 0.50  # Conservative 50¢ estimate
             
             # Total portfolio value is the basis for all allocations
@@ -569,8 +570,8 @@ class UnifiedAdvancedTradingSystem:
                         market_obj = next((m for m in opportunities if m.market_id == market_id), None)
                         if market_obj:
                             time_to_expiry_days = getattr(market_obj, 'time_to_expiry', 30)
-                    except:
-                        pass
+                    except Exception as e:
+                        self.logger.warning(f"Failed to get time_to_expiry for {market_id}, using default: {e}")
                     
                     exit_levels = StopLossCalculator.calculate_stop_loss_levels(
                         entry_price=price,

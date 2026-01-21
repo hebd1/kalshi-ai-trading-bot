@@ -606,7 +606,13 @@ Required format:
             
             # Extract other fields
             side = decision_data.get('side', 'YES').upper()
-            confidence = float(decision_data.get('confidence', 0.5))
+            
+            # Validate confidence is present (critical for trading decisions)
+            if 'confidence' not in decision_data:
+                self.logger.error("AI response missing confidence value - cannot make trading decision")
+                return None
+            
+            confidence = float(decision_data.get('confidence'))
             limit_price = int(decision_data.get('limit_price', 50))
             reasoning = decision_data.get('reasoning', 'No reasoning provided')
             

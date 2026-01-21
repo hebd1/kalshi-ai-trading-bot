@@ -144,9 +144,14 @@ class AdvancedMarketMaker:
                 analysis = await self._get_ai_analysis(market)
                 if not analysis:
                     continue
-                    
-                ai_prob = analysis.get('probability', 0.5)
-                ai_confidence = analysis.get('confidence', 0.5)
+                
+                # Require explicit AI analysis - no defaults
+                ai_prob = analysis.get('probability')
+                ai_confidence = analysis.get('confidence')
+                
+                if ai_prob is None or ai_confidence is None:
+                    self.logger.warning(f"Market {market.market_id} missing AI probability or confidence, skipping")
+                    continue
                 
                 # Apply edge filtering before creating market making opportunity
                 from src.utils.edge_filter import EdgeFilter

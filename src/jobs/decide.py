@@ -480,8 +480,8 @@ async def make_decision_for_market(
             await db_manager.record_market_analysis(
                 market.market_id, "ERROR", 0.0, 0.01, "error"
             )
-        except:
-            pass  # Don't fail on logging failure
+        except Exception as logging_error:
+            logger.warning(f"Failed to record market analysis error for {market.market_id}: {logging_error}")
         return None
 
 

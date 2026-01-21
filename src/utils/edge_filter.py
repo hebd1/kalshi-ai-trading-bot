@@ -139,10 +139,14 @@ class EdgeFilter:
         filtered_opportunities = []
         
         for opp in opportunities:
-            # Extract required fields
-            ai_prob = opp.get('predicted_probability', 0.5)
-            market_prob = opp.get('market_probability', 0.5)
-            confidence = opp.get('confidence', 0.7)
+            # Extract required fields - no defaults, skip if missing
+            ai_prob = opp.get('predicted_probability')
+            market_prob = opp.get('market_probability')
+            confidence = opp.get('confidence')
+            
+            # Skip opportunities with missing critical data
+            if ai_prob is None or market_prob is None or confidence is None:
+                continue
             
             # Calculate edge
             edge_result = cls.calculate_edge(ai_prob, market_prob, confidence)

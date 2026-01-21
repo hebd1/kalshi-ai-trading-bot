@@ -782,7 +782,8 @@ class AdvancedPortfolioOptimizer:
             eigenvals, eigenvecs = np.linalg.eigh(matrix)
             eigenvals = np.maximum(eigenvals, 0.001)  # Ensure positive
             return eigenvecs @ np.diag(eigenvals) @ eigenvecs.T
-        except:
+        except Exception as e:
+            self.logger.warning(f"Failed to fix correlation matrix, using identity: {e}")
             return np.eye(matrix.shape[0])
     
     def _estimate_portfolio_max_drawdown(self, weights: np.ndarray, opportunities: List[MarketOpportunity]) -> float:
@@ -997,8 +998,9 @@ async def _evaluate_immediate_trade(
                                                or (100 - market_info.get('last_price', 50))) / 100
                             position_value = abs(quantity) * current_price
                             total_position_value += position_value
-                        except:
+                        except Exception as e:
                             # If we can't get market data, estimate at entry price
+                            logger.warning(f"Failed to get market data for {market_id} in portfolio calc: {e}")
                             total_position_value += abs(quantity) * 0.50  # Conservative 50¢ estimate
             
             total_portfolio_value = available_cash + total_position_value
@@ -1214,7 +1216,8 @@ def _calculate_simple_kelly(opportunity: MarketOpportunity) -> float:
         kelly = (b * p - q) / b
         return max(0, min(kelly, 0.2))  # Cap at 20%
         
-    except:
+    except Exception as e:
+        logger.warning(f"Kelly criterion calculation failed for market {opportunity.market_id}: {e}")
         return 0.05  # Default 5% allocation
 
 
