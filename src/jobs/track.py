@@ -70,8 +70,14 @@ async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: 
                         market_data = await kalshi_client.get_market(ticker)
                         market_info = market_data.get('market', {})
                         
-                        price = (market_info.get('yes_price', 50) if side == 'YES' 
-                                else market_info.get('no_price', 50)) / 100
+                        # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+                        # Fallback chain: bid -> ask -> last_price
+                        if side == 'YES':
+                            price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                    or market_info.get('last_price', 50)) / 100
+                        else:
+                            price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                    or (100 - market_info.get('last_price', 50))) / 100
                         
                         new_position = Position(
                             market_id=ticker,
@@ -129,25 +135,16 @@ async def should_exit_position(
             exit_price = current_price
         return True, "market_resolution", exit_price
     
-    # 1.5 CRITICAL FIX: Detect market resolution even if status not yet 'closed'
-    # If price is 0.00 or 1.00, the market has effectively resolved
-    # This prevents false "take_profit" triggers when market resolves against us
-    if current_price <= 0.01 or current_price >= 0.99:
-        # Price at extreme (0 or 1) indicates market resolution
-        # Determine if we won or lost based on price
+    # 1.5 CRITICAL FIX: Detect market resolution - SIMPLIFIED VERSION
+    # Only trigger if price is EXACTLY 0.00 or 1.00 (not 0.01 or 0.99)
+    # The original bot doesn't have this aggressive check
+    if current_price == 0.0 or current_price == 1.0:
+        # Price at exact extreme indicates market resolution
         if position.side == "YES":
-            # YES position: wins if yes_price = 1.00, loses if yes_price = 0.00
-            if current_yes_price >= 0.99:
-                exit_price = 1.0  # We won
-            else:
-                exit_price = 0.0  # We lost
+            exit_price = 1.0 if current_yes_price == 1.0 else 0.0
         else:
-            # NO position: wins if no_price = 1.00 (yes_price = 0.00), loses if no_price = 0.00
-            if current_no_price >= 0.99:
-                exit_price = 1.0  # We won
-            else:
-                exit_price = 0.0  # We lost
-        return True, "market_resolution_by_price", exit_price
+            exit_price = 1.0 if current_no_price == 1.0 else 0.0
+        return True, "market_resolution_confirmed", exit_price
     
     # 2. ENHANCED Stop-loss exit using proper logic for YES/NO positions
     if position.stop_loss_price:
@@ -318,8 +315,17 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                     continue
 
                 # Get current prices
-                current_yes_price = market_data.get('yes_price', 0) / 100  # Convert cents to dollars
-                current_no_price = market_data.get('no_price', 0) / 100
+                # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price!
+                # The old code used non-existent fields, causing exit_price=0 for all trades
+                yes_bid = market_data.get('yes_bid', 0) or 0
+                no_bid = market_data.get('no_bid', 0) or 0
+                last_price = market_data.get('last_price', 50)
+                
+                # Use bid price for exit (what buyers are willing to pay)
+                # Fallback to last_price if no bid available
+                current_yes_price = (yes_bid if yes_bid > 0 else last_price) / 100
+                current_no_price = (no_bid if no_bid > 0 else (100 - last_price)) / 100
+                
                 market_status = market_data.get('status', 'unknown')
                 market_result = market_data.get('result')  # Market resolution result
                 

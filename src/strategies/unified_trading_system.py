@@ -177,10 +177,13 @@ class UnifiedAdvancedTradingSystem:
                         try:
                             market_data = await self.kalshi_client.get_market(market_id)
                             market_info = market_data.get('market', {})
+                            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
                             if position.get('side') == 'yes':
-                                current_price = market_info.get('yes_price', 50) / 100
+                                current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                               or market_info.get('last_price', 50)) / 100
                             else:
-                                current_price = market_info.get('no_price', 50) / 100
+                                current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                               or (100 - market_info.get('last_price', 50))) / 100
                             position_value = abs(quantity) * current_price
                             total_position_value += position_value
                         except:
@@ -545,11 +548,14 @@ class UnifiedAdvancedTradingSystem:
                     # FIXED: Extract from nested 'market' object
                     market_info = market_data.get('market', {})
                     
+                    # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
                     # Get price for the intended side (already determined above)
                     if intended_side == "YES":
-                        price = market_info.get('yes_price', 50) / 100
+                        price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                or market_info.get('last_price', 50)) / 100
                     else:
-                        price = market_info.get('no_price', 50) / 100
+                        price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                or (100 - market_info.get('last_price', 50))) / 100
                     
                     # Calculate quantity
                     quantity = max(1, int(position_value / price))

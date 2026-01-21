@@ -89,10 +89,14 @@ async def comprehensive_analysis():
                 try:
                     market_data = await kalshi_client.get_market(ticker)
                     market_info = market_data.get('market', {})
-                    if quantity > 0:  # Long position
-                        current_price = market_info.get('yes_price', 50) / 100
-                    else:  # Short position  
-                        current_price = market_info.get('no_price', 50) / 100
+                    # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+                    # Fallback chain: bid -> ask -> last_price
+                    if quantity > 0:  # Long YES position
+                        current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                        or market_info.get('last_price', 50)) / 100
+                    else:  # Long NO position  
+                        current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                        or (100 - market_info.get('last_price', 50))) / 100
                     position_value = abs(quantity) * current_price
                     total_position_value += position_value
                 except:

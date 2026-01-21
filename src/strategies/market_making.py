@@ -128,9 +128,13 @@ class AdvancedMarketMaker:
                 market_data = await self.kalshi_client.get_market(market.market_id)
                 if not market_data:
                     continue
-                    
-                current_yes_price = market_data.get('yes_price', 0) / 100
-                current_no_price = market_data.get('no_price', 0) / 100
+                
+                # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+                market_info = market_data.get('market', {})
+                current_yes_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                    or market_info.get('last_price', 50)) / 100
+                current_no_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                   or (100 - market_info.get('last_price', 50))) / 100
                 
                 # Skip if prices are extreme (hard to make markets) - relaxed thresholds
                 if current_yes_price < 0.02 or current_yes_price > 0.98:
@@ -567,7 +571,10 @@ class AdvancedMarketMaker:
             if not market_data:
                 return False
             
-            current_yes_price = market_data.get('yes_price', 0) / 100
+            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+            market_info = market_data.get('market', {})
+            current_yes_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                or market_info.get('last_price', 50)) / 100
             order_price = order.price / 100
             
             # Update if market has moved significantly

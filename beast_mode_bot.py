@@ -239,12 +239,16 @@ class BeastModeBot:
                                 if market_data and 'market' in market_data:
                                     market_info = market_data['market']
                                     
+                                    # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+                                    # Fallback chain: bid -> ask -> last_price
                                     if position_count > 0:  # YES position
                                         side = 'YES'
-                                        current_price = market_info.get('yes_price', 50) / 100
+                                        current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                                        or market_info.get('last_price', 50)) / 100
                                     else:  # NO position
                                         side = 'NO'
-                                        current_price = market_info.get('no_price', 50) / 100
+                                        current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                                        or (100 - market_info.get('last_price', 50))) / 100
                                     
                                     # Create untracked position
                                     untracked_position = Position(
@@ -331,13 +335,17 @@ class BeastModeBot:
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
                             
+                            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+                            # Fallback chain: bid -> ask -> last_price
                             # Determine side and current price
                             if position_count > 0:  # YES position
                                 side = 'YES'
-                                current_price = market_info.get('yes_price', 50) / 100
+                                current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                                or market_info.get('last_price', 50)) / 100
                             else:  # NO position
                                 side = 'NO'
-                                current_price = market_info.get('no_price', 50) / 100
+                                current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                                or (100 - market_info.get('last_price', 50))) / 100
                             
                             # Check if position already exists in DB (including closed positions!)
                             # First check for open position

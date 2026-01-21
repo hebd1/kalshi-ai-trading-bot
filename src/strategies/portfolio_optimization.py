@@ -843,7 +843,9 @@ async def create_market_opportunities_from_markets(
             
             # FIXED: Extract from nested 'market' object (same fix as immediate trading)
             market_info = market_data.get('market', {})
-            market_prob = market_info.get('yes_price', 50) / 100
+            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
+            market_prob = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                          or market_info.get('last_price', 50)) / 100
             
             # Skip markets with extreme prices (too risky for portfolio)
             if market_prob < 0.05 or market_prob > 0.95:
@@ -986,10 +988,13 @@ async def _evaluate_immediate_trade(
                         try:
                             market_data = await kalshi_client.get_market(market_id)
                             market_info = market_data.get('market', {})
+                            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
                             if position.get('side') == 'yes':
-                                current_price = market_info.get('yes_price', 50) / 100
+                                current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
+                                               or market_info.get('last_price', 50)) / 100
                             else:
-                                current_price = market_info.get('no_price', 50) / 100
+                                current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
+                                               or (100 - market_info.get('last_price', 50))) / 100
                             position_value = abs(quantity) * current_price
                             total_position_value += position_value
                         except:

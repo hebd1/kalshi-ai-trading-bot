@@ -31,23 +31,22 @@ class EdgeFilter:
     """
     Centralized edge filtering following Grok4 recommendations.
     
-    BALANCED: Allow trading while maintaining quality filters.
-    Settings calibrated to typical AI output (60-70% confidence, 5-12% edges).
+    UPDATED: More aggressive thresholds to allow more trading opportunities.
     """
     
-    # BALANCED: Require meaningful edge (8% minimum)
-    MIN_EDGE_REQUIREMENT = 0.08        # BALANCED: 8% minimum edge (allows typical AI predictions)
-    HIGH_CONFIDENCE_EDGE = 0.06        # BALANCED: 6% edge for high confidence (>=70%)
-    MEDIUM_CONFIDENCE_EDGE = 0.08      # BALANCED: 8% edge for medium confidence (55-70%)
-    LOW_CONFIDENCE_EDGE = 0.12         # BALANCED: 12% edge for low confidence (<55%)
+    # DECREASED: More permissive edge requirements for more trades
+    MIN_EDGE_REQUIREMENT = 0.08        # DECREASED: 8% minimum edge (was 15%)
+    HIGH_CONFIDENCE_EDGE = 0.06        # DECREASED: 6% edge for high confidence (was 12%)  
+    MEDIUM_CONFIDENCE_EDGE = 0.08      # DECREASED: 8% edge for medium confidence (was 15%)
+    LOW_CONFIDENCE_EDGE = 0.12         # DECREASED: 12% edge for low confidence (was 20%)
     
-    # BALANCED: Reasonable confidence threshold
-    MIN_CONFIDENCE_FOR_TRADE = 0.55    # BALANCED: 55% minimum confidence (allows typical AI output)
-    MAX_ACCEPTABLE_RISK = 0.6          # BALANCED: 60% max position risk
+    # DECREASED: More permissive filters for more opportunities
+    MIN_CONFIDENCE_FOR_TRADE = 0.50    # DECREASED: 50% minimum confidence (was 65%)
+    MAX_ACCEPTABLE_RISK = 0.6          # INCREASED: 60% max position risk (was 50%)
     
-    # BALANCED: Reasonable liquidity requirements
-    MIN_VOLUME_FOR_HIGH_EDGE = 500     # BALANCED: Allow lower volume markets
-    MIN_SPREAD_QUALITY = 0.03          # BALANCED: Allow wider spreads
+    # UPDATED: More permissive quality filters
+    MIN_VOLUME_FOR_HIGH_EDGE = 500     # DECREASED: Lower volume requirement (was 2000, now 500)
+    MIN_SPREAD_QUALITY = 0.03          # INCREASED: Allow wider spreads (was 0.02, now 0.03)
     
     @classmethod
     def calculate_edge(

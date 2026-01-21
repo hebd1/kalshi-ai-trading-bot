@@ -1,0 +1,103 @@
+{
+  "passed": 12,
+  "failed": 3,
+  "warnings": 1,
+  "tests": [
+    {
+      "name": "Private Key Loading",
+      "status": "\u2705 PASS",
+      "details": "Private key loaded from keys/kalshi_private_key.pem",
+      "timestamp": "2026-01-21T10:07:06.769590"
+    },
+    {
+      "name": "API Key Configuration",
+      "status": "\u2705 PASS",
+      "details": "API key configured (length: 36)",
+      "timestamp": "2026-01-21T10:07:06.770463"
+    },
+    {
+      "name": "Demo Environment",
+      "status": "\u2705 PASS",
+      "details": "Using demo environment: https://demo-api.kalshi.co",
+      "timestamp": "2026-01-21T10:07:06.771312"
+    },
+    {
+      "name": "Balance API Call",
+      "status": "\u2705 PASS",
+      "details": "Response received",
+      "timestamp": "2026-01-21T10:07:07.470154"
+    },
+    {
+      "name": "Balance Response Structure",
+      "status": "\u2705 PASS",
+      "details": "All required fields present",
+      "timestamp": "2026-01-21T10:07:07.471005"
+    },
+    {
+      "name": "Balance Value",
+      "status": "\u2705 PASS",
+      "details": "Balance: $3638.84 ($363884 cents)",
+      "timestamp": "2026-01-21T10:07:07.471831"
+    },
+    {
+      "name": "Portfolio Value",
+      "status": "\u2705 PASS",
+      "details": "Portfolio value: $369.49",
+      "timestamp": "2026-01-21T10:07:07.472743"
+    },
+    {
+      "name": "Positions API Call",
+      "status": "\u2705 PASS",
+      "details": "Response received",
+      "timestamp": "2026-01-21T10:07:08.022755"
+    },
+    {
+      "name": "Positions Response Structure",
+      "status": "\u2705 PASS",
+      "details": "Found 25 positions",
+      "timestamp": "2026-01-21T10:07:08.023686"
+    },
+    {
+      "name": "Position Valuation",
+      "status": "\u2705 PASS",
+      "details": "Total position value: $331.86",
+      "timestamp": "2026-01-21T10:07:10.763747"
+    },
+    {
+      "name": "Get Markets",
+      "status": "\u274c FAIL",
+      "details": "Error: HTTP 400: {\"error\":{\"code\":\"bad_request\",\"message\":\"bad request\",\"details\":\"invalid status filter\"}}",
+      "timestamp": "2026-01-21T10:07:11.306673"
+    },
+    {
+      "name": "Get Market Detail",
+      "status": "\u274c FAIL",
+      "details": "Error: HTTP 400: {\"error\":{\"code\":\"bad_request\",\"message\":\"bad request\",\"details\":\"invalid status filter\"}}",
+      "timestamp": "2026-01-21T10:07:11.845540"
+    },
+    {
+      "name": "Portfolio Calculations",
+      "status": "\u2705 PASS",
+      "details": "Total portfolio value: $3970.70",
+      "timestamp": "2026-01-21T10:07:14.535837"
+    },
+    {
+      "name": "Portfolio Value Accuracy",
+      "status": "\u26a0\ufe0f WARNING",
+      "details": "API position value $369.49 vs calculated $331.86 (diff: $37.63)",
+      "timestamp": "2026-01-21T10:07:14.536703"
+    },
+    {
+      "name": "API Latency",
+      "status": "\u2705 PASS",
+      "details": "Average latency: 46.33ms",
+      "timestamp": "2026-01-21T10:07:14.544606"
+    },
+    {
+      "name": "API Success Rate",
+      "status": "\u274c FAIL",
+      "details": "Low success rate: 75.0%",
+      "timestamp": "2026-01-21T10:07:14.545493"
+    }
+  ]
+}

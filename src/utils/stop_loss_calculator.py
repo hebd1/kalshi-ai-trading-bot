@@ -88,9 +88,10 @@ class StopLossCalculator:
             take_profit_pct = cls.MIN_TAKE_PROFIT_PCT  # 15% for low confidence
             
         # Calculate actual price levels (SAME for both YES and NO)
-        # When you OWN any contract, you profit by selling HIGHER and lose by selling LOWER
-        # Stop-loss is always BELOW entry (sell at loss)
-        # Take-profit is always ABOVE entry (sell at profit)
+        # NOTE: On Kalshi, buying "NO" is a Long position on the "NO" contract.
+        # So for both YES and NO sides, you profit if the price rises and lose if it falls.
+        # - Stop-loss is always BELOW entry (sell at loss)
+        # - Take-profit is always ABOVE entry (sell at profit)
         stop_loss_price = entry_price * (1 - adjusted_stop_loss_pct)
         take_profit_price = entry_price * (1 + take_profit_pct)
             
