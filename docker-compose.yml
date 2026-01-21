@@ -7,7 +7,10 @@ services:
     restart: unless-stopped
     
     environment:
-      # Kalshi API Configuration
+      # Trading Mode ("demo" or "live")
+      - TRADING_MODE=${TRADING_MODE:-demo}
+      
+      # Kalshi API Configuration (Demo/Test)
       - KALSHI_API_KEY=${KALSHI_API_KEY}
       - KALSHI_PRIVATE_KEY=/app/keys/kalshi_private_key.pem
       - KALSHI_BASE_URL=${KALSHI_BASE_URL:-https://demo-api.kalshi.co}
@@ -26,6 +29,9 @@ services:
       # Python configuration
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
+      
+      # Database path
+      - DB_PATH=/app/trading_system.db
       
       # Timezone
       - TZ=${TZ:-America/Denver}

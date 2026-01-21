@@ -39,6 +39,7 @@ class Position:
     status: str = "open"  # open, closed, pending
     id: Optional[int] = None
     strategy: Optional[str] = None  # Strategy that created this position
+    tracked: bool = True  # Whether to track P&L for this position (False for legacy positions)
     
     # Enhanced exit strategy fields
     stop_loss_price: Optional[float] = None
@@ -299,6 +300,7 @@ class DatabaseManager(TradingLoggerMixin):
                 live BOOLEAN NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'open',
                 strategy TEXT,
+                tracked BOOLEAN NOT NULL DEFAULT 1,
                 stop_loss_price REAL,
                 take_profit_price REAL,
                 max_hold_hours INTEGER,
@@ -462,6 +464,10 @@ class DatabaseManager(TradingLoggerMixin):
             if 'target_confidence_change' not in column_names:
                 await db.execute("ALTER TABLE positions ADD COLUMN target_confidence_change REAL")
                 self.logger.info("Added target_confidence_change column to positions table")
+                
+            if 'tracked' not in column_names:
+                await db.execute("ALTER TABLE positions ADD COLUMN tracked BOOLEAN NOT NULL DEFAULT 1")
+                self.logger.info("Added tracked column to positions table")
             
             # Migration: Add exit_reason and slippage columns to trade_logs
             cursor = await db.execute("PRAGMA table_info(trade_logs)")
@@ -673,7 +679,7 @@ class DatabaseManager(TradingLoggerMixin):
 
     async def add_trade_log(self, trade_log: TradeLog) -> None:
         """
-        Add a trade log entry.
+        Add a trade log entry with duplicate prevention.
         
         Args:
             trade_log: The trade log to add.
@@ -683,6 +689,23 @@ class DatabaseManager(TradingLoggerMixin):
         trade_dict['exit_timestamp'] = trade_log.exit_timestamp.isoformat()
         
         async with aiosqlite.connect(self.db_path) as db:
+            # Check for duplicate trade log entries to prevent phantom entries
+            # A duplicate is defined as same market_id, side, exit_timestamp (within 1 minute)
+            cursor = await db.execute("""
+                SELECT COUNT(*) FROM trade_logs 
+                WHERE market_id = ? 
+                AND side = ? 
+                AND ABS(CAST((julianday(exit_timestamp) - julianday(?)) * 24 * 60 AS INTEGER)) < 1
+            """, (trade_log.market_id, trade_log.side, trade_dict['exit_timestamp']))
+            count = (await cursor.fetchone())[0]
+            
+            if count > 0:
+                self.logger.warning(
+                    f"Duplicate trade log detected for {trade_log.market_id} {trade_log.side}, skipping insert",
+                    exit_timestamp=trade_dict['exit_timestamp']
+                )
+                return
+            
             await db.execute("""
                 INSERT INTO trade_logs (
                     market_id, side, entry_price, exit_price, quantity, pnl, 
@@ -1081,8 +1104,8 @@ class DatabaseManager(TradingLoggerMixin):
             position_dict['timestamp'] = position.timestamp.isoformat()
 
             cursor = await db.execute("""
-                INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
-                VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
+                INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, tracked, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
+                VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :tracked, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
             """, position_dict)
             await db.commit()
             

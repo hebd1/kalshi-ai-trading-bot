@@ -48,6 +48,9 @@ async def test_full_trading_cycle():
             test_market, db_manager, xai_client, kalshi_client
         )
         
+        # Use paper trading mode for end-to-end tests
+        live_mode = False
+        
         if position:
             print(f"✅ Decision made: {position.side} {position.quantity} @ ${position.entry_price}")
             

@@ -59,6 +59,11 @@ class BeastModeBot:
     """
     
     def __init__(self, live_mode: bool = False, dashboard_mode: bool = False):
+        # Auto-detect trading mode from environment if not explicitly set
+        if not live_mode:
+            env_mode = settings.api.get_trading_mode_from_env()
+            live_mode = (env_mode == "live")
+        
         self.live_mode = live_mode
         self.dashboard_mode = dashboard_mode
         self.logger = get_trading_logger("beast_mode_bot")
@@ -79,6 +84,11 @@ class BeastModeBot:
             f"🔑 Environment: {'PROD' if live_mode else 'DEMO'} "
             f"({settings.api.kalshi_base_url})"
         )
+        
+        # Log explicit warning for live trading
+        if live_mode:
+            self.logger.warning("⚠️  LIVE TRADING MODE ENABLED - USING REAL MONEY!")
+            self.logger.warning("⚠️  Ensure production API credentials are correctly configured!")
 
     async def run_dashboard_mode(self):
         """Run in live dashboard mode with real-time updates."""
@@ -180,9 +190,11 @@ class BeastModeBot:
         Sync actual positions and balance from Kalshi on startup.
         
         This method ensures the database accurately reflects reality by:
-        1. Getting all real positions from Kalshi API
-        2. Marking any DB positions NOT on Kalshi as 'closed'
-        3. Upserting all Kalshi positions into the database
+        1. Detecting if this is first run (empty database)
+        2. On FIRST run: Ignores existing Kalshi positions (pre-bot deployment)
+        3. On SUBSEQUENT runs: Syncs positions to prevent drift
+        4. Marking any DB positions NOT on Kalshi as 'closed'
+        5. Upserting tracked Kalshi positions into the database
         """
         try:
             import aiosqlite
@@ -191,6 +203,78 @@ class BeastModeBot:
             balance_response = await kalshi_client.get_balance()
             balance = balance_response.get('balance', 0) / 100
             self.logger.info(f"💰 Current balance: ${balance:.2f}")
+            
+            # 🚨 CRITICAL: Check if this is the FIRST RUN (empty database)
+            position_count = await self._count_all_positions(db_manager)
+            is_first_run = (position_count == 0)
+            
+            if is_first_run:
+                self.logger.warning("=" * 60)
+                self.logger.warning("🔔 FIRST RUN DETECTED - Empty Database")
+                self.logger.warning("=" * 60)
+                self.logger.warning("ℹ️  Bot will mark existing Kalshi positions as UNTRACKED")
+                self.logger.warning("ℹ️  Untracked positions: included in balance, excluded from P&L")
+                self.logger.warning("ℹ️  Only NEW positions created by bot will generate trade logs")
+                self.logger.warning("=" * 60)
+                
+                # Mark database as initialized
+                await self._mark_database_initialized(db_manager)
+                
+                # Get existing positions from Kalshi and mark as untracked
+                positions_response = await kalshi_client.get_positions()
+                market_positions = positions_response.get('market_positions', [])
+                
+                existing_count = sum(1 for pos in market_positions if pos.get('position', 0) != 0)
+                if existing_count > 0:
+                    self.logger.info(f"📊 Found {existing_count} existing Kalshi positions - marking as UNTRACKED")
+                    
+                    # Sync existing positions but mark them as untracked
+                    for pos in market_positions:
+                        ticker = pos.get('ticker')
+                        position_count = pos.get('position', 0)
+                        
+                        if ticker and position_count != 0:
+                            try:
+                                market_data = await kalshi_client.get_market(ticker)
+                                if market_data and 'market' in market_data:
+                                    market_info = market_data['market']
+                                    
+                                    if position_count > 0:  # YES position
+                                        side = 'YES'
+                                        current_price = market_info.get('yes_price', 50) / 100
+                                    else:  # NO position
+                                        side = 'NO'
+                                        current_price = market_info.get('no_price', 50) / 100
+                                    
+                                    # Create untracked position
+                                    untracked_position = Position(
+                                        market_id=ticker,
+                                        side=side,
+                                        entry_price=current_price,
+                                        quantity=abs(position_count),
+                                        timestamp=datetime.now(),
+                                        rationale="Pre-existing position (untracked for P&L)",
+                                        confidence=0.5,
+                                        live=True,
+                                        status='open',
+                                        strategy='legacy_untracked',
+                                        tracked=False  # Mark as untracked
+                                    )
+                                    
+                                    await db_manager.add_position(untracked_position)
+                                    self.logger.info(f"   ✅ Synced UNTRACKED: {ticker} {side} ({abs(position_count)} contracts)")
+                                    
+                            except Exception as e:
+                                self.logger.warning(f"Could not sync untracked position {ticker}: {e}")
+                    
+                    self.logger.info("✅ Existing positions synced as UNTRACKED")
+                    self.logger.info("✅ These will be included in balance but NOT in P&L calculations")
+                    self.logger.info("✅ No trade logs will be created when they close")
+                else:
+                    self.logger.info("📊 No existing Kalshi positions found")
+                
+                self.logger.info("🚀 First run initialization complete - ready for trading!")
+                return  # Exit after marking existing positions as untracked
             
             # Get current positions from Kalshi (the REAL source of truth)
             positions_response = await kalshi_client.get_positions()
@@ -334,6 +418,41 @@ class BeastModeBot:
             
         except Exception as e:
             self.logger.error(f"Error syncing positions: {e}")
+
+    async def _count_all_positions(self, db_manager: DatabaseManager) -> int:
+        """
+        Count all positions in database (any status).
+        Used to detect first run.
+        """
+        import aiosqlite
+        async with aiosqlite.connect(db_manager.db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM positions")
+            count = (await cursor.fetchone())[0]
+            return count
+
+    async def _mark_database_initialized(self, db_manager: DatabaseManager):
+        """
+        Mark database as initialized (past first run).
+        Creates metadata record to track initialization.
+        """
+        import aiosqlite
+        async with aiosqlite.connect(db_manager.db_path) as db:
+            # Create metadata table if it doesn't exist
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS system_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+            
+            # Mark as initialized
+            await db.execute("""
+                INSERT OR REPLACE INTO system_metadata (key, value, timestamp)
+                VALUES ('first_run_completed', 'true', ?)
+            """, (datetime.now().isoformat(),))
+            
+            await db.commit()
 
     async def _run_market_ingestion(self, db_manager: DatabaseManager, kalshi_client: KalshiClient):
         """Background task for market data ingestion."""

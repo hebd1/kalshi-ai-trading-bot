@@ -7,6 +7,7 @@ This job monitors open positions and implements smart exit strategies:
 - Take-profit exits  
 - Time-based exits
 - Confidence-based exits
+- Periodic database sync with Kalshi (every 5 minutes)
 """
 import asyncio
 from datetime import datetime, timedelta
@@ -16,6 +17,92 @@ from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
 from src.utils.logging_setup import setup_logging, get_trading_logger, log_trade_execution
 from src.clients.kalshi_client import KalshiClient
+
+# Last sync timestamp for periodic syncing
+_last_db_sync = None
+_sync_interval_seconds = 300  # 5 minutes
+
+async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: KalshiClient) -> dict:
+    """
+    Periodic database sync to ensure positions match Kalshi's real-time data.
+    Runs every 5 minutes to catch any discrepancies.
+    
+    Returns:
+        Dict with sync results: {'synced': int, 'closed': int, 'errors': int}
+    """
+    logger = get_trading_logger("db_sync")
+    results = {'synced': 0, 'closed': 0, 'errors': 0}
+    
+    try:
+        # Get Kalshi positions
+        positions_response = await kalshi_client.get_positions()
+        kalshi_positions = positions_response.get('market_positions', [])
+        
+        # Build set of active Kalshi market IDs
+        kalshi_active = set()
+        for pos in kalshi_positions:
+            if pos.get('position', 0) != 0:
+                kalshi_active.add(pos.get('ticker'))
+        
+        # Get database positions
+        db_positions = await db_manager.get_open_positions()
+        
+        # Check for positions in DB but not on Kalshi (need to close)
+        for db_pos in db_positions:
+            if db_pos.market_id not in kalshi_active:
+                # This position closed on Kalshi but still open in DB
+                await db_manager.update_position_status(db_pos.id, 'closed')
+                results['closed'] += 1
+                logger.info(f"Closed stale position: {db_pos.market_id} (not on Kalshi)")
+        
+        # Check for positions on Kalshi but not in DB (add them)
+        for kalshi_pos in kalshi_positions:
+            ticker = kalshi_pos.get('ticker')
+            position_count = kalshi_pos.get('position', 0)
+            
+            if position_count != 0 and ticker:
+                side = 'YES' if position_count > 0 else 'NO'
+                db_pos = await db_manager.get_position_by_market_and_side(ticker, side)
+                
+                if not db_pos:
+                    # Position exists on Kalshi but not in DB - create it
+                    try:
+                        market_data = await kalshi_client.get_market(ticker)
+                        market_info = market_data.get('market', {})
+                        
+                        price = (market_info.get('yes_price', 50) if side == 'YES' 
+                                else market_info.get('no_price', 50)) / 100
+                        
+                        new_position = Position(
+                            market_id=ticker,
+                            side=side,
+                            entry_price=price,
+                            quantity=abs(position_count),
+                            timestamp=datetime.now(),
+                            rationale="Synced from Kalshi during periodic sync",
+                            confidence=0.5,
+                            live=True,
+                            status='open',
+                            strategy='sync_recovery'
+                        )
+                        
+                        await db_manager.add_position(new_position)
+                        results['synced'] += 1
+                        logger.info(f"Synced missing position from Kalshi: {ticker} {side}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error syncing position {ticker}: {e}")
+                        results['errors'] += 1
+        
+        if results['synced'] > 0 or results['closed'] > 0:
+            logger.info(f"Database sync complete: {results}")
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error during database sync: {e}")
+        results['errors'] += 1
+        return results
 
 async def should_exit_position(
     position: Position, 
@@ -155,6 +242,8 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
     Args:
         db_manager: Optional DatabaseManager instance for testing.
     """
+    global _last_db_sync
+    
     logger = get_trading_logger("position_tracking")
     logger.info("Starting enhanced position tracking job with sell limit orders.")
 
@@ -165,6 +254,19 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
     kalshi_client = KalshiClient()
 
     try:
+        # Step 0: Periodic database sync (every 5 minutes)
+        now = datetime.now()
+        if _last_db_sync is None or (now - _last_db_sync).total_seconds() >= _sync_interval_seconds:
+            logger.info("🔄 Running periodic database sync with Kalshi...")
+            sync_results = await sync_database_with_kalshi(db_manager, kalshi_client)
+            _last_db_sync = now
+            
+            if sync_results['synced'] > 0 or sync_results['closed'] > 0:
+                logger.info(
+                    f"✅ Database sync: {sync_results['synced']} positions synced, "
+                    f"{sync_results['closed']} stale positions closed"
+                )
+        
         # Step 1: Place sell limit orders for profit-taking and stop-loss
         from src.jobs.execute import place_profit_taking_orders, place_stop_loss_orders
         
@@ -232,6 +334,19 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                 )
 
                 if should_exit:
+                    # Check if position is tracked (skip trade logs for untracked/legacy positions)
+                    is_tracked = getattr(position, 'tracked', True)  # Default to True for backward compatibility
+                    
+                    if not is_tracked:
+                        logger.info(
+                            f"Closing UNTRACKED position {position.market_id} (no trade log will be created). "
+                            f"Entry: {position.entry_price:.3f}, Exit: {exit_price:.3f}"
+                        )
+                        # Just close the position without creating a trade log
+                        await db_manager.update_position_status(position.id, 'closed')
+                        logger.info(f"Position {position.market_id} closed (untracked - no P&L recorded)")
+                        continue
+                    
                     logger.info(
                         f"Exiting position {position.market_id} due to {exit_reason}. "
                         f"Entry: {position.entry_price:.3f}, Exit: {exit_price:.3f}"

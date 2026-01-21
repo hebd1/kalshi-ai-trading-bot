@@ -23,6 +23,26 @@ class APIConfig:
     xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""))
     openai_base_url: str = "https://api.openai.com/v1"
     
+    def get_trading_mode_from_env(self) -> str:
+        """Get trading mode from TRADING_MODE environment variable.
+        
+        Returns:
+            "live" for production trading, "demo" for paper trading
+        """
+        # Check TRADING_MODE first (preferred)
+        trading_mode = os.getenv("TRADING_MODE", "").lower()
+        if trading_mode in ["live", "prod", "production"]:
+            return "live"
+        elif trading_mode in ["demo", "test", "paper"]:
+            return "demo"
+        
+        # Fallback to legacy LIVE_TRADING_ENABLED for backward compatibility
+        legacy_enabled = os.getenv("LIVE_TRADING_ENABLED", "false").lower()
+        if legacy_enabled in ["true", "1", "yes"]:
+            return "live"
+        
+        return "demo"
+    
     def configure_environment(self, use_live: bool) -> None:
         """Configure API credentials based on environment (live vs demo).
         
@@ -36,6 +56,13 @@ class APIConfig:
             self.kalshi_api_key = os.getenv("KALSHI_API_KEY_PROD", "")
             self.kalshi_private_key = os.getenv("KALSHI_PRIVATE_KEY_PROD", "keys/kalshi_private_key.prod.pem")
             self.kalshi_base_url = os.getenv("KALSHI_BASE_URL_PROD", "https://api.elections.kalshi.com")
+            
+            # Validation for production
+            if not self.kalshi_api_key:
+                raise ValueError(
+                    "KALSHI_API_KEY_PROD is required for live trading! "
+                    "Please set production API credentials in your environment."
+                )
         else:
             # Use TEST/demo credentials for paper trading
             self.kalshi_api_key = os.getenv("KALSHI_API_KEY", "")

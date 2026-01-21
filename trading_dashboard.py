@@ -74,7 +74,11 @@ st.markdown("""
 
 # @st.cache_data(ttl=60)  # Cache for 1 minute - temporarily disabled
 def load_performance_data():
-    """Load performance data from database and merge with live Kalshi positions."""
+    """Load performance data from database and merge with live Kalshi positions.
+    
+    Syncs with Kalshi API on load to ensure accurate positions and balance.
+    Falls back to database snapshots if API fails.
+    """
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -88,14 +92,27 @@ def load_performance_data():
             # Get performance by strategy - ensure it's serializable
             performance_raw = await db_manager.get_performance_by_strategy()
             
-            # Convert performance data to ensure serializability
+            # Convert performance data to ensure serializability with totals
             performance = {}
+            total_trades = 0
+            total_wins = 0
+            
             if performance_raw:
                 for strategy, stats in performance_raw.items():
                     performance[str(strategy)] = {
                         str(k): float(v) if isinstance(v, (int, float)) else str(v) 
                         for k, v in stats.items()
                     }
+                    # Aggregate totals
+                    total_trades += stats.get('completed_trades', 0)
+                    total_wins += stats.get('winning_trades', 0)
+            
+            # Add totals to performance data
+            performance['_totals'] = {
+                'total_trades': total_trades,
+                'total_wins': total_wins,
+                'overall_win_rate': (total_wins / total_trades * 100) if total_trades > 0 else 0
+            }
             
             # Get database positions (which have entry prices)
             db_positions = await db_manager.get_open_positions()
@@ -112,9 +129,17 @@ def load_performance_data():
                     'rationale': db_pos.rationale
                 }
             
-            # Get LIVE positions from Kalshi API
-            positions_response = await kalshi_client.get_positions()
-            kalshi_positions = positions_response.get('market_positions', [])
+            # Try to get LIVE positions from Kalshi API with fallback
+            try:
+                positions_response = await kalshi_client.get_positions()
+                kalshi_positions = positions_response.get('market_positions', [])
+            except Exception as kalshi_error:
+                print(f"Warning: Kalshi API error, using database positions: {kalshi_error}")
+                # Fallback to database positions only
+                kalshi_positions = [
+                    {'ticker': market_id, 'position': 1 if side == 'YES' else -1}
+                    for (market_id, side) in db_positions_map.keys()
+                ]
             
             # Merge Kalshi positions with database entry prices
             positions = []
@@ -155,10 +180,14 @@ def load_performance_data():
                         market_data = await kalshi_client.get_market(ticker)
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
+                            
+                            # Determine current price with fallback to last_price
                             if position_count > 0:  # YES position
-                                current_price = float(market_info.get('yes_price', 50) / 100)
+                                current_price = float(market_info.get('yes_price', 
+                                    market_info.get('last_price', 50)) / 100)
                             else:  # NO position
-                                current_price = float(market_info.get('no_price', 50) / 100)
+                                current_price = float(market_info.get('no_price',
+                                    100 - market_info.get('last_price', 50)) / 100)
                             
                             position_dict['current_price'] = current_price
                             
@@ -174,7 +203,8 @@ def load_performance_data():
                             
                             total_unrealized_pnl += unrealized_pnl
                     except Exception as e:
-                        position_dict['current_price'] = 0.50
+                        # Fallback to entry price or 50¢ estimate
+                        position_dict['current_price'] = entry_price if entry_price > 0 else 0.50
                         print(f"Warning: Could not get market data for {ticker}: {e}")
                     
                     positions.append(position_dict)
