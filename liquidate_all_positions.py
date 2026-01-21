@@ -148,21 +148,33 @@ async def liquidate_position(
         market_info = market_data.get('market', {})
         
         if side == 'YES':
-            # Selling YES - use yes_bid or last_price
-            price_cents = market_info.get('yes_bid', 0) or market_info.get('last_price', 50)
+            # Selling YES - try to find a bid, otherwise dump at 1 cent
+            price_cents = market_info.get('yes_bid', 0)
+            if price_cents == 0:
+                print("   ⚠️  No bid liquidity found! Placing limit sell @ 1¢")
+                price_cents = 1
         else:
-            # Selling NO - use no_bid or (100 - last_price)
-            price_cents = market_info.get('no_bid', 0) or (100 - market_info.get('last_price', 50))
+            # Selling NO - try to find a bid, otherwise dump at 1 cent
+            price_cents = market_info.get('no_bid', 0)
+            if price_cents == 0:
+                print("   ⚠️  No bid liquidity found! Placing limit sell @ 1¢")
+                price_cents = 1
         
         print(f"   Placing market sell order: {quantity} {side} @ {price_cents}¢")
         
+        # Override to limit order if we are forcing a 1 cent exit on illiquid market
+        order_type = "market"
+        if (side == 'YES' and market_info.get('yes_bid', 0) == 0) or \
+           (side == 'NO' and market_info.get('no_bid', 0) == 0):
+            order_type = "limit"
+
         order_params = {
             "ticker": ticker,
             "client_order_id": client_order_id,
             "side": side.lower(),
             "action": "sell",
             "count": quantity,
-            "type_": "market"
+            "type_": order_type
         }
         
         # Add price parameter based on side
@@ -214,6 +226,11 @@ async def liquidate_position(
 
 async def main():
     """Main liquidation process."""
+    import argparse
+    parser = argparse.ArgumentParser(description='Liquidate all positions')
+    parser.add_argument('--force', action='store_true', help='Skip confirmation prompt')
+    args = parser.parse_args()
+
     print("\n🚨 PRODUCTION POSITION LIQUIDATION TOOL 🚨")
     print("\nThis tool will liquidate ALL positions in your production account.")
     print("⚠️  WARNING: This operation cannot be undone!")
@@ -238,18 +255,22 @@ async def main():
         await display_liquidation_summary(positions, db_manager)
         
         # Step 3: Get confirmation
-        print("\n⚠️  Are you ABSOLUTELY SURE you want to liquidate ALL positions?")
-        print("This will:")
-        print("  - Place MARKET SELL orders for all positions")
-        print("  - Close positions at current market prices (potential slippage)")
-        print("  - Update the database to reflect the liquidation")
-        print("\nType 'LIQUIDATE' to confirm, or anything else to cancel: ", end='')
-        
-        confirmation = input().strip()
-        
-        if confirmation != 'LIQUIDATE':
-            print("\n❌ Liquidation cancelled. No positions were touched.")
-            return
+        if not args.force:
+            print("\n⚠️  Are you ABSOLUTELY SURE you want to liquidate ALL positions?")
+            print("This will:")
+            print("  - Place MARKET SELL orders for all positions")
+            print("  - Close positions at current market prices (potential slippage)")
+            print("  - Update the database to reflect the liquidation")
+            print("\nType 'LIQUIDATE' to confirm, or anything else to cancel: ", end='')
+            
+            confirmation = input().strip()
+            
+            if confirmation != 'LIQUIDATE':
+                print("\n❌ Liquidation cancelled. No positions were touched.")
+                return
+        else:
+            print("\n⚠️  --force flag detected. Skipping interactive confirmation.")
+            print("🚀 Proceeding with liquidation...")
         
         # Step 4: Execute liquidation
         print("\n🔄 Starting liquidation process...")

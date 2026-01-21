@@ -1127,6 +1127,11 @@ class DatabaseManager(TradingLoggerMixin):
             positions = []
             for row in rows:
                 # Convert database row to Position object
+                # Column mapping (from PRAGMA table_info):
+                # 0=id, 1=market_id, 2=side, 3=entry_price, 4=quantity, 5=timestamp,
+                # 6=rationale, 7=confidence, 8=live, 9=status, 10=strategy,
+                # 11=stop_loss_price, 12=take_profit_price, 13=max_hold_hours,
+                # 14=target_confidence_change, 15=tracked
                 position = Position(
                     market_id=row[1],
                     side=row[2],
@@ -1138,10 +1143,12 @@ class DatabaseManager(TradingLoggerMixin):
                     live=bool(row[8]),
                     status=row[9],
                     id=row[0],
-                    stop_loss_price=row[10],
-                    take_profit_price=row[11],
-                    max_hold_hours=row[12],
-                    target_confidence_change=row[13]
+                    strategy=row[10],
+                    tracked=bool(row[15]) if row[15] is not None else True,
+                    stop_loss_price=row[11],
+                    take_profit_price=row[12],
+                    max_hold_hours=row[13],
+                    target_confidence_change=row[14]
                 )
                 positions.append(position)
             

@@ -427,7 +427,11 @@ def main():
     # Show data status in sidebar
     st.sidebar.markdown("---")
     st.sidebar.markdown("**📊 Data Status:**")
-    st.sidebar.metric("Active Positions", len(positions) if positions else 0)
+    
+    # Filter active bot positions for sidebar
+    active_bot_positions = [p for p in positions if p.get('strategy') != 'startup_sync'] if positions else []
+    st.sidebar.metric("Active Positions", len(active_bot_positions))
+    
     st.sidebar.metric("LLM Queries (24h)", len(llm_queries) if llm_queries else 0)
     st.sidebar.metric("Cash Balance", f"${system_health_data.get('available_cash', 0):.2f}")
     
@@ -475,10 +479,11 @@ def show_overview(performance_data, positions, system_health_data):
         )
     
     with col4:
+        active_bot_positions = [p for p in positions if p.get('strategy') != 'startup_sync']
         st.metric(
-            label="🎯 Active Positions",
-            value=len(positions) if positions else 0,
-            help="Currently open positions"
+            label="🎯 Active Bot Positions",
+            value=len(active_bot_positions),
+            help=f"Bot-managed positions (Total including legacy: {len(positions)})"
         )
     
     # Second row - Performance metrics
@@ -487,25 +492,27 @@ def show_overview(performance_data, positions, system_health_data):
     with col1b:
         total_trades = sum(stats.get('completed_trades', 0) for stats in performance_data.values()) if performance_data else 0
         st.metric(
-            label="📈 Total Trades",
+            label="📈 Total Bot Trades",
             value=total_trades,
-            help="Total completed trades across all strategies"
+            help="Total completed trades by the bot"
         )
     
     with col2b:
         # Calculate realized P&L from completed trades
         realized_pnl = sum(stats.get('total_pnl', 0) for stats in performance_data.values()) if performance_data else 0
-        unrealized_pnl = system_health_data.get('unrealized_pnl', 0)
-        total_pnl = realized_pnl + unrealized_pnl
+        
+        # Calculate unrealized P&L (excluding legacy)
+        bot_unrealized_pnl = sum(p.get('unrealized_pnl', 0) for p in positions if p.get('strategy') != 'startup_sync')
+        total_pnl = realized_pnl + bot_unrealized_pnl
         
         # Color the delta based on unrealized P&L
-        delta_color = "normal" if unrealized_pnl >= 0 else "inverse"
+        delta_color = "normal" if bot_unrealized_pnl >= 0 else "inverse"
         st.metric(
-            label="💹 Total P&L",
+            label="💹 Bot Total P&L",
             value=f"${total_pnl:.2f}",
-            delta=f"Unrealized: ${unrealized_pnl:+.2f}",
+            delta=f"Unrealized: ${bot_unrealized_pnl:+.2f}",
             delta_color=delta_color,
-            help=f"Realized: ${realized_pnl:.2f} + Unrealized: ${unrealized_pnl:.2f}"
+            help=f"Realized: ${realized_pnl:.2f} + Unrealized: ${bot_unrealized_pnl:.2f}"
         )
     
     with col3b:
@@ -581,11 +588,19 @@ def show_overview(performance_data, positions, system_health_data):
     st.subheader("📋 Recent Activity")
     
     if positions:
-        st.write(f"**{len(positions)} active positions:**")
+        # Filter out startup_sync positions for cleaner overview
+        active_positions = [p for p in positions if p.get('strategy') != 'startup_sync']
         
-        # Show top positions by value
+        if active_positions:
+            st.write(f"**{len(active_positions)} active positions:**")
+        else:
+            st.write(f"**{len(positions)} positions (all legacy - synced on startup):**")
+            st.info("💡 Go to **Positions & Trades** page and check the box to view legacy positions.")
+        
+        # Show top positions by value (use active positions if available, otherwise show first 10 legacy)
+        display_positions = active_positions if active_positions else positions[:10]
         position_data = []
-        for pos in positions[:10]:  # Top 10
+        for pos in display_positions[:10]:  # Top 10
             # Convert timestamp string back to datetime for display
             try:
                 timestamp = datetime.fromisoformat(pos['timestamp'])
@@ -887,10 +902,37 @@ def show_positions_trades(positions):
         st.warning("No active positions found.")
         return
     
-    # Calculate summary stats
-    total_unrealized = sum(pos.get('unrealized_pnl', 0) for pos in positions)
-    winning_positions = sum(1 for pos in positions if pos.get('unrealized_pnl', 0) > 0)
-    losing_positions = sum(1 for pos in positions if pos.get('unrealized_pnl', 0) < 0)
+    # Add toggle to show/hide legacy positions (startup_sync)
+    show_legacy = st.checkbox(
+        "📦 Include legacy positions (synced on startup)", 
+        value=False,
+        help="Show positions that were imported from Kalshi during bot startup (strategy='startup_sync')"
+    )
+    
+    # Filter positions based on toggle
+    if show_legacy:
+        filtered_positions = positions
+    else:
+        filtered_positions = [p for p in positions if p.get('strategy') != 'startup_sync']
+    
+    # Show count of filtered positions
+    if not show_legacy and len(filtered_positions) < len(positions):
+        hidden_count = len(positions) - len(filtered_positions)
+        st.info(f"ℹ️ Hiding {hidden_count} legacy position(s). Check the box above to show them.")
+    
+    # Use filtered positions for display but original for summary stats
+    display_positions = filtered_positions
+    
+    if not display_positions:
+        st.info("No active trading positions. All positions are legacy (synced on startup).")
+        if not show_legacy:
+            st.info("💡 Check the box above to view legacy positions.")
+        return
+    
+    # Calculate summary stats from display positions
+    total_unrealized = sum(pos.get('unrealized_pnl', 0) for pos in display_positions)
+    winning_positions = sum(1 for pos in display_positions if pos.get('unrealized_pnl', 0) > 0)
+    losing_positions = sum(1 for pos in display_positions if pos.get('unrealized_pnl', 0) < 0)
     
     # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -902,16 +944,16 @@ def show_positions_trades(positions):
     with col3:
         st.metric("Losing Positions", f"🔴 {losing_positions}")
     with col4:
-        st.metric("Break-even", f"⚪ {len(positions) - winning_positions - losing_positions}")
+        st.metric("Break-even", f"⚪ {len(display_positions) - winning_positions - losing_positions}")
     
     st.markdown("---")
     
     # Positions overview
-    st.subheader(f"📊 Active Positions ({len(positions)})")
+    st.subheader(f"📊 Active Positions ({len(display_positions)})")
     
     # Create positions DataFrame
     position_data = []
-    for pos in positions:
+    for pos in display_positions:
         # Convert timestamp string back to datetime for display
         try:
             timestamp = datetime.fromisoformat(pos['timestamp'])
@@ -1042,6 +1084,11 @@ def show_risk_management(performance_data, positions, system_balance):
         st.subheader("🚨 Risk Alerts")
         st.success("✅ All risk metrics within acceptable ranges")
         return
+    
+    # Check if we have legacy positions
+    legacy_count = sum(1 for p in positions if p.get('strategy') == 'startup_sync')
+    if legacy_count > 0:
+        st.info(f"ℹ️ **Note:** Risk metrics include {legacy_count} legacy positions (startup_sync) to ensure total portfolio risk is accurate.")
     
     # Calculate risk metrics from live positions
     try:
