@@ -128,10 +128,18 @@ class XAIClient(TradingLoggerMixin):
             self.logger.error(f"Failed to save daily tracker: {e}")
 
     def _update_daily_cost(self, cost: float):
-        """Update daily cost tracking."""
+        """Update daily cost tracking in both pickle file and database."""
         self.daily_tracker.total_cost += cost
         self.daily_tracker.request_count += 1
         self._save_daily_tracker()
+        
+        # Also update database if db_manager is available
+        if self.db_manager:
+            try:
+                # Sync costs to database for evaluation reports
+                asyncio.create_task(self._sync_cost_to_database(cost))
+            except Exception as e:
+                self.logger.debug(f"Failed to sync cost to database: {e}")
         
         # Check if we've hit daily limit
         if self.daily_tracker.total_cost >= self.daily_tracker.daily_limit:
@@ -145,6 +153,25 @@ class XAIClient(TradingLoggerMixin):
                 daily_limit=self.daily_tracker.daily_limit,
                 requests_today=self.daily_tracker.request_count
             )
+    
+    async def _sync_cost_to_database(self, cost: float):
+        """Sync cost to database daily_cost_tracking table."""
+        try:
+            import aiosqlite
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            async with aiosqlite.connect(self.db_manager.db_path) as db:
+                # Update daily cost tracking in database
+                await db.execute("""
+                    INSERT INTO daily_cost_tracking (date, total_ai_cost, analysis_count, decision_count)
+                    VALUES (?, ?, 1, 0)
+                    ON CONFLICT(date) DO UPDATE SET
+                        total_ai_cost = total_ai_cost + excluded.total_ai_cost,
+                        analysis_count = analysis_count + 1
+                """, (today, cost))
+                await db.commit()
+        except Exception as e:
+            self.logger.debug(f"Error syncing cost to database: {e}")
 
     async def _check_daily_limits(self) -> bool:
         """

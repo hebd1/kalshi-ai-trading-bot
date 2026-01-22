@@ -252,8 +252,8 @@ class KalshiClient(TradingLoggerMixin):
                     attempt=attempt + 1
                 )
                 
-                # Add aggressive delay between requests to prevent 429s
-                await asyncio.sleep(0.5)  # 500ms delay = max 2 requests/second
+                # Add small delay between requests to prevent 429s
+                await asyncio.sleep(0.1)  # 100ms delay = max 10 requests/second
                 
                 # Track request timing for latency measurement
                 request_start = time.time()

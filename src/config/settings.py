@@ -81,7 +81,7 @@ class TradingConfig:
     
     # Market filtering criteria - MUCH MORE PERMISSIVE
     min_volume: float = 50.0            # DECREASED: Much lower volume requirement (was 200, now 50)
-    max_time_to_expiry_days: int = 90    # INCREASED: Allow much longer timeframes (was 30, now 90)
+    max_time_to_expiry_days: int = 30    # INCREASED: Allow much longer timeframes (was 30, now 90)
     
     # AI decision making - MORE AGGRESSIVE THRESHOLDS
     min_confidence_to_trade: float = 0.45   # DECREASED: Lower confidence barrier (was 0.50, now 0.40)

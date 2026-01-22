@@ -155,15 +155,27 @@ class UnifiedAdvancedTradingSystem:
         from Kalshi and setting the total capital.
         """
         try:
-            # Get total portfolio value (cash + current positions)
-            balance_response = await self.kalshi_client.get_balance()
+            self.logger.info("🔄 Starting async initialization...")
+            
+            # Get total portfolio value (cash + current positions) with timeout
+            self.logger.info("📊 Fetching balance from Kalshi...")
+            balance_response = await asyncio.wait_for(
+                self.kalshi_client.get_balance(), 
+                timeout=30.0
+            )
             available_cash = balance_response.get('balance', 0) / 100  # Convert cents to dollars
+            self.logger.info(f"✅ Balance fetched: ${available_cash:.2f}")
             
             # Get current positions to calculate total portfolio value
             # NOTE: This includes BOTH tracked and untracked positions for accurate capital allocation
             # Untracked positions (legacy/pre-bot) must be included in risk calculations and position limits
-            positions_response = await self.kalshi_client.get_positions()
+            self.logger.info("📊 Fetching positions from Kalshi...")
+            positions_response = await asyncio.wait_for(
+                self.kalshi_client.get_positions(),
+                timeout=30.0
+            )
             positions = positions_response.get('positions', []) if isinstance(positions_response, dict) else []
+            self.logger.info(f"✅ Positions fetched: {len(positions)} positions")
             total_position_value = 0
             
             if positions:
@@ -171,25 +183,13 @@ class UnifiedAdvancedTradingSystem:
                     if not isinstance(position, dict):
                         continue  # Skip non-dict positions
                     quantity = position.get('quantity', 0)
-                    # Get current market price for this position
+                    # SIMPLIFIED: Use 50¢ estimate instead of fetching market data for each position
+                    # This prevents initialization hangs from excessive API calls
                     market_id = position.get('market_id')
                     if market_id and quantity != 0:
-                        try:
-                            market_data = await self.kalshi_client.get_market(market_id)
-                            market_info = market_data.get('market', {})
-                            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
-                            if position.get('side') == 'yes':
-                                current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
-                                               or market_info.get('last_price', 50)) / 100
-                            else:
-                                current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
-                                               or (100 - market_info.get('last_price', 50))) / 100
-                            position_value = abs(quantity) * current_price
-                            total_position_value += position_value
-                        except Exception as e:
-                            # If we can't get market data, use conservative estimate
-                            self.logger.warning(f"Failed to get market data for {market_id} during portfolio calculation: {e}")
-                            total_position_value += abs(quantity) * 0.50  # Conservative 50¢ estimate
+                        # Use conservative 50¢ estimate for position value during initialization
+                        # Actual values will be calculated during tracking
+                        total_position_value += abs(quantity) * 0.50
             
             # Total portfolio value is the basis for all allocations
             total_portfolio_value = available_cash + total_position_value
