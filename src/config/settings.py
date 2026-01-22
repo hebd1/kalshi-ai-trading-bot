@@ -130,7 +130,7 @@ class TradingConfig:
     max_analyses_per_market_per_day: int = 10  # INCREASED: More analyses per day (was 4, now 10)
     
     # Daily AI spending limits - SAFETY CONTROLS
-    daily_ai_cost_limit: float = 50.0  # INCREASED: Raise spending limit (was 50.0)
+    daily_ai_cost_limit: float = 0.5  # INCREASED: Raise spending limit (was 50.0)
     enable_daily_cost_limiting: bool = True  # Enable daily cost limits
     sleep_when_limit_reached: bool = True  # Sleep until next day when limit reached
 
@@ -212,7 +212,7 @@ min_confidence_long_term: float = 0.35  # DECREASED: Lower confidence for distan
 
 # === COST OPTIMIZATION (MORE GENEROUS) ===
 # Enhanced cost controls for the beast mode system
-daily_ai_budget: float = 25.0           # INCREASED: Higher budget for more opportunities (was 10.0, now 25.0)
+daily_ai_budget: float = 0.5           # INCREASED: Higher budget for more opportunities (was 10.0, now 25.0)
 max_ai_cost_per_decision: float = 0.20  # INCREASED: Higher per-decision limit (was 0.08, now 0.20)
 analysis_cooldown_hours: int = 1        # DECREASED: Much shorter cooldown (was 4, now 1)
 max_analyses_per_market_per_day: int = 10  # INCREASED: More analyses per day (was 3, now 10)
