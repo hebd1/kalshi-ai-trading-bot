@@ -283,6 +283,17 @@ async def place_profit_taking_orders(
         
         for position in positions:
             try:
+                # Check for existing active sell orders to prevent duplicates
+                existing_orders = await db_manager.get_orders_by_position(position.id)
+                has_active_sell = any(
+                    o.action == 'sell' and o.status in ['pending', 'placed', 'submitted'] 
+                    for o in existing_orders
+                )
+                
+                if has_active_sell:
+                    logger.debug(f"Skipping profit-taking for {position.market_id} - active sell order exists")
+                    continue
+
                 results['positions_processed'] += 1
                 
                 # Get current market data
@@ -313,8 +324,32 @@ async def place_profit_taking_orders(
                     
                     # Check if we should place a profit-taking sell order
                     if profit_pct >= profit_threshold:
-                        # Calculate sell limit price (slightly below current to ensure execution)
-                        sell_price = current_price * 0.98  # 2% below current price for quick execution
+                        # Use "chasing limit order" strategy
+                        # Start at mid-price or slightly better, then aggressive
+                        # For now, we will be aggressive to secure the profit
+                        # Cross the spread immediately to get filled (taker fee is worth it for profit taking)
+                        if position.side == "YES":
+                            # We are selling YES shares
+                            # Bid price is what buyers are willing to pay us
+                            # We should sell AT or slightly BELOW bid to ensure fill
+                            best_bid = (yes_bid if yes_bid > 0 else last_price - 1) / 100
+                            # If we use current_price (which uses bid logic), we are safer
+                            # Use 1% below current price (bid) to ensure immediate execution
+                            sell_price = current_price * 0.99
+                        else:
+                            # We are selling NO shares
+                            # No bid is what buyes willing to pay
+                            best_bid = (no_bid if no_bid > 0 else (100 - last_price) - 1) / 100
+                            sell_price = current_price * 0.99
+                        
+                        # Safety check: ensure sell price is still profitable
+                        # If crossing spread erodes all profit, hold or limit at mid
+                        if sell_price <= position.entry_price * 1.05 and profit_pct > 0.10:
+                            # If we have 10%+ profit but crossing spread kills it, use limit at mid
+                            # But here we assume profit_threshold > 20% so we have buffer
+                            sell_price = max(sell_price, position.entry_price * 1.05)
+
+                        sell_price = max(0.01, sell_price)
                         
                         logger.info(f"💰 PROFIT TARGET HIT: {position.market_id} - {profit_pct:.1%} profit (${unrealized_pnl:.2f})")
                         
@@ -376,6 +411,17 @@ async def place_stop_loss_orders(
         
         for position in positions:
             try:
+                # Check for existing active sell orders to prevent duplicates
+                existing_orders = await db_manager.get_orders_by_position(position.id)
+                has_active_sell = any(
+                    o.action == 'sell' and o.status in ['pending', 'placed', 'submitted'] 
+                    for o in existing_orders
+                )
+                
+                if has_active_sell:
+                    logger.debug(f"Skipping stop-loss for {position.market_id} - active sell order exists")
+                    continue
+
                 results['positions_processed'] += 1
                 
                 # Get current market data
@@ -405,7 +451,9 @@ async def place_stop_loss_orders(
                     # Check if we need stop-loss protection
                     if loss_pct <= stop_loss_threshold:  # Negative loss percentage
                         # Calculate stop-loss sell price
-                        stop_price = position.entry_price * (1 + stop_loss_threshold * 1.1)  # Slightly more aggressive
+                        # CRITICAL FIX: Use current_price for stop loss, not entry_price
+                        # We need to cross the spread to exit immediately
+                        stop_price = current_price * 0.95  # 5% below current price to ensure fill
                         stop_price = max(0.01, stop_price)  # Ensure price is at least 1¢
                         
                         logger.info(f"🛡️ STOP LOSS TRIGGERED: {position.market_id} - {loss_pct:.1%} loss (${unrealized_pnl:.2f})")

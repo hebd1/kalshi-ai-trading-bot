@@ -79,12 +79,12 @@ class TradingConfig:
     max_positions: int = 15              # INCREASED: Allow 15 concurrent positions (was 10)
     min_balance: float = 50.0           # REDUCED: Lower minimum to trade more (was 100)
     
-    # Market filtering criteria - MUCH MORE PERMISSIVE
-    min_volume: float = 200.0            # DECREASED: Much lower volume requirement (was 500, now 200)
+    # Market filtering criteria - BALANCED
+    min_volume: float = 500.0            # INCREASED: Higher volume requirement (increased from 200 to 500 for quality)
     max_time_to_expiry_days: int = 30    # INCREASED: Allow longer timeframes (was 14, now 30)
     
-    # AI decision making - MORE AGGRESSIVE THRESHOLDS
-    min_confidence_to_trade: float = 0.50   # DECREASED: Lower confidence barrier (was 0.65, now 0.50)
+    # AI decision making - BALANCED THRESHOLDS
+    min_confidence_to_trade: float = 0.60   # INCREASED: Better confidence barrier (increased from 0.50 to 0.60 for quality)
     scan_interval_seconds: int = 30      # DECREASED: Scan more frequently (was 60, now 30)
     
     # AI model configuration
@@ -102,12 +102,12 @@ class TradingConfig:
     kelly_fraction: float = 0.75            # INCREASED: More aggressive Kelly multiplier (was 0.5, now 0.75)
     max_single_position: float = 0.05       # INCREASED: Higher position cap (was 0.03, now 5%)
     
-    # Trading frequency - MORE FREQUENT
-    market_scan_interval: int = 30          # DECREASED: Scan every 30 seconds (was 60)
-    position_check_interval: int = 15       # DECREASED: Check positions every 15 seconds (was 30)
-    max_trades_per_hour: int = 20           # INCREASED: Allow more trades per hour (was 10, now 20)
+    # Trading frequency - BALANCED (Restored from aggressive)
+    market_scan_interval: int = 60          # RESTORED: Scan every 60 seconds (reduced from 30 to prevent 429s)
+    position_check_interval: int = 30       # RESTORED: Check positions every 30 seconds (reduced from 15 to prevent 429s)
+    max_trades_per_hour: int = 15           # REDUCED: Limit trades per hour (reduced from 20 to 15 for quality)
     run_interval_minutes: int = 10          # DECREASED: Run more frequently (was 15, now 10)
-    num_processor_workers: int = 5      # Number of concurrent market processor workers
+    num_processor_workers: int = 3          # REDUCED: Concurrent workers (reduced from 5 to 3 to prevent 429s)
     
     # Market selection preferences
     preferred_categories: List[str] = field(default_factory=lambda: [])
@@ -123,19 +123,19 @@ class TradingConfig:
     max_analysis_cost_per_decision: float = 0.15  # INCREASED: Allow higher cost per decision (was 0.10, now 0.15)
     min_confidence_threshold: float = 0.45  # DECREASED: Lower confidence threshold (was 0.55, now 0.45)
 
-    # Cost control and market analysis frequency - MORE PERMISSIVE
+    # Cost control and market analysis frequency - BALANCED
     daily_ai_budget: float = 1.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
     max_ai_cost_per_decision: float = 0.08  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
-    analysis_cooldown_hours: int = 3  # DECREASED: Shorter cooldown (was 6, now 3)
-    max_analyses_per_market_per_day: int = 4  # INCREASED: More analyses per day (was 2, now 4)
+    analysis_cooldown_hours: int = 4  # INCREASED: Better cooldown (increased from 3 to 4 hours)
+    max_analyses_per_market_per_day: int = 4  # BALANCED: Moderate analyses per day (was 2, increased to 4, kept at 4)
     
     # Daily AI spending limits - SAFETY CONTROLS
     daily_ai_cost_limit: float = 1.0  # Maximum daily spending on AI API calls (USD)
     enable_daily_cost_limiting: bool = True  # Enable daily cost limits
     sleep_when_limit_reached: bool = True  # Sleep until next day when limit reached
 
-    # Enhanced market filtering to reduce analyses - MORE PERMISSIVE
-    min_volume_for_ai_analysis: float = 200.0  # DECREASED: Much lower threshold (was 500, now 200)
+    # Enhanced market filtering to reduce analyses - BALANCED
+    min_volume_for_ai_analysis: float = 500.0  # INCREASED: Higher threshold (increased from 200 to 500 for quality)
     exclude_low_liquidity_categories: List[str] = field(default_factory=lambda: [
         # REMOVED weather and entertainment - trade all categories
     ])
@@ -201,10 +201,10 @@ max_inventory_risk: float = 0.15        # INCREASED: Allow higher inventory risk
 order_refresh_minutes: int = 15         # Refresh orders every 15 minutes
 max_orders_per_market: int = 4          # Maximum orders per market (2 each side)
 
-# === MARKET SELECTION (ENHANCED FOR MORE OPPORTUNITIES) ===
+# === MARKET SELECTION (BALANCED FOR QUALITY) ===
 # Removed time restrictions - trade ANY deadline with dynamic exits!
 # max_time_to_expiry_days: REMOVED      # No longer used - trade any timeline!
-min_volume_for_analysis: float = 200.0  # DECREASED: Much lower minimum volume (was 1000, now 200)
+min_volume_for_analysis: float = 500.0  # INCREASED: Higher minimum volume (increased from 200 to 500 for quality)
 min_volume_for_market_making: float = 500.0  # DECREASED: Lower volume for market making (was 2000, now 500)
 min_price_movement: float = 0.02        # DECREASED: Lower minimum range (was 0.05, now 2¢)
 max_bid_ask_spread: float = 0.15        # INCREASED: Allow wider spreads (was 0.10, now 15¢)

@@ -316,6 +316,26 @@ async def make_decision_for_market(
         if decision.action == "BUY" and decision.confidence >= settings.trading.min_confidence_to_trade:
             price = market.yes_price if decision.side == "YES" else market.no_price
             
+            # --- Spread-Aware Filtering ---
+            # Reject markets with wide spreads (> 5 cents) immediately to prevent entering bad trades.
+            current_spread = abs(market.yes_price - (1 - market.no_price))
+            # Note: In Kalshi yes_price is the ask for 'yes', no_price is ask for 'no'.
+            # The spread calculation depends on exact market data availability.
+            # Using simpler check: if we are buying at price X, we should check if the spread is reasonable.
+            # For this filter, we will check if yes_price + no_price is significantly > 1.00 (which implies wide spread).
+            # Ideal market: YES(0.60) + NO(0.41) = 1.01 cost (1 cent spread).
+            # Bad market: YES(0.60) + NO(0.48) = 1.08 cost (8 cent spread).
+            
+            implied_spread_cost = (market.yes_price + market.no_price) - 1.0
+            MAX_SPREAD_TOLERANCE = 0.05  # 5 cents max spread allowed
+            
+            if implied_spread_cost > MAX_SPREAD_TOLERANCE:
+                logger.info(f"❌ SPREAD FILTER REJECTED: {market.market_id} - Spread {implied_spread_cost:.2f} > {MAX_SPREAD_TOLERANCE}")
+                await db_manager.record_market_analysis(
+                    market.market_id, "SPREAD_FILTERED", decision.confidence, total_analysis_cost, f"High spread: {implied_spread_cost:.2f}"
+                )
+                return None
+            
             # Apply Grok4 edge filtering - 10% minimum edge requirement
             from src.utils.edge_filter import EdgeFilter
             
