@@ -246,8 +246,17 @@ class Settings:
     
     def validate(self) -> bool:
         """Validate configuration settings."""
-        if not self.api.kalshi_api_key:
-            raise ValueError("KALSHI_API_KEY environment variable is required")
+        # Check for appropriate API key based on environment
+        trading_mode = self.api.get_trading_mode_from_env()
+        if trading_mode == "live":
+            # In live mode, check for PROD API key
+            prod_api_key = os.getenv("KALSHI_API_KEY_PROD", "")
+            if not prod_api_key:
+                raise ValueError("KALSHI_API_KEY_PROD environment variable is required for live trading")
+        else:
+            # In demo mode, check for regular API key
+            if not self.api.kalshi_api_key:
+                raise ValueError("KALSHI_API_KEY environment variable is required")
         
         if not self.api.xai_api_key:
             raise ValueError("XAI_API_KEY environment variable is required")

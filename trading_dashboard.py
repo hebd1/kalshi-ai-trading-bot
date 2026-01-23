@@ -662,12 +662,12 @@ def show_strategy_performance(performance_data):
         for strategy, stats in performance_data.items():
             comparison_data.append({
                 'Strategy': strategy.replace('_', ' ').title(),
-                'Completed Trades': stats['completed_trades'],
-                'Total P&L': f"${stats['total_pnl']:.2f}",
-                'Avg P&L per Trade': f"${stats['avg_pnl_per_trade']:.2f}",
-                'Win Rate': f"{stats['win_rate_pct']:.1f}%",
-                'Best Trade': f"${stats['best_trade']:.2f}",
-                'Worst Trade': f"${stats['worst_trade']:.2f}",
+                'Completed Trades': stats.get('completed_trades', 0),
+                'Total P&L': f"${stats.get('total_pnl', 0):.2f}",
+                'Avg P&L per Trade': f"${stats.get('avg_pnl_per_trade', 0):.2f}",
+                'Win Rate': f"{stats.get('win_rate_pct', 0):.1f}%",
+                'Best Trade': f"${stats.get('best_trade', 0):.2f}",
+                'Worst Trade': f"${stats.get('worst_trade', 0):.2f}",
                 'Open Positions': stats['open_positions'],
                 'Capital Deployed': f"${stats['capital_deployed']:.2f}"
             })
@@ -683,10 +683,10 @@ def show_strategy_performance(performance_data):
             fig_risk = go.Figure()
             
             for strategy, stats in performance_data.items():
-                if stats['completed_trades'] > 0:
+                if stats.get('completed_trades', 0) > 0:
                     fig_risk.add_trace(go.Scatter(
-                        x=[stats['avg_pnl_per_trade']],
-                        y=[stats['win_rate_pct']],
+                        x=[stats.get('avg_pnl_per_trade', 0)],
+                        y=[stats.get('win_rate_pct', 0)],
                         mode='markers+text',
                         text=[strategy.replace('_', ' ').title()],
                         textposition="top center",
@@ -727,16 +727,16 @@ def show_strategy_performance(performance_data):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Total P&L", f"${stats['total_pnl']:.2f}")
+            st.metric("Total P&L", f"${stats.get('total_pnl', 0):.2f}")
         with col2:
-            st.metric("Win Rate", f"{stats['win_rate_pct']:.1f}%")
+            st.metric("Win Rate", f"{stats.get('win_rate_pct', 0):.1f}%")
         with col3:
-            st.metric("Completed Trades", stats['completed_trades'])
+            st.metric("Completed Trades", stats.get('completed_trades', 0))
         with col4:
-            st.metric("Open Positions", stats['open_positions'])
+            st.metric("Open Positions", stats.get('open_positions', 0))
         
         # Detailed metrics
-        if stats['completed_trades'] > 0:
+        if stats.get('completed_trades', 0) > 0:
             st.subheader("📈 Detailed Metrics")
             
             col1, col2 = st.columns(2)

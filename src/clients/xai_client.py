@@ -283,6 +283,11 @@ class XAIClient(TradingLoggerMixin):
             # Process and optimize the search query
             optimized_query = self._optimize_search_query(query)
             
+            # Enforce daily AI limits before performing a live search
+            if not await self._check_daily_limits():
+                self.logger.info("Daily AI limit reached - skipping live search", query=optimized_query[:50])
+                return self._get_fallback_context(query, max_length)
+
             # Check cache first (simple in-memory cache)
             if hasattr(self, '_search_cache'):
                 cache_key = f"{optimized_query[:50]}:{max_length}"
@@ -415,6 +420,12 @@ Provide a brief, factual summary under {max_length//2} words. If no current info
         
         self.total_cost += search_cost
         self.request_count += 1
+
+        # Update daily tracker and persist to disk/DB
+        try:
+            self._update_daily_cost(search_cost)
+        except Exception as e:
+            self.logger.debug(f"Failed to update daily cost after search: {e}")
         
         self.logger.info(
             "xAI search completed successfully",
