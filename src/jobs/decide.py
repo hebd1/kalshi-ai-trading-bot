@@ -318,13 +318,10 @@ async def make_decision_for_market(
             
             # --- Spread-Aware Filtering ---
             # Reject markets with wide spreads (> 5 cents) immediately to prevent entering bad trades.
-            current_spread = abs(market.yes_price - (1 - market.no_price))
-            # Note: In Kalshi yes_price is the ask for 'yes', no_price is ask for 'no'.
-            # The spread calculation depends on exact market data availability.
-            # Using simpler check: if we are buying at price X, we should check if the spread is reasonable.
-            # For this filter, we will check if yes_price + no_price is significantly > 1.00 (which implies wide spread).
-            # Ideal market: YES(0.60) + NO(0.41) = 1.01 cost (1 cent spread).
-            # Bad market: YES(0.60) + NO(0.48) = 1.08 cost (8 cent spread).
+            # In Kalshi: yes_price + no_price should equal ~$1.00 in efficient markets.
+            # Wide spreads occur when: yes_price + no_price > $1.00 + tolerance
+            # Example: YES(0.60) + NO(0.41) = 1.01 (1¢ spread - GOOD)
+            #          YES(0.60) + NO(0.48) = 1.08 (8¢ spread - BAD)
             
             implied_spread_cost = (market.yes_price + market.no_price) - 1.0
             MAX_SPREAD_TOLERANCE = 0.05  # 5 cents max spread allowed

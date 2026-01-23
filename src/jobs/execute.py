@@ -324,32 +324,21 @@ async def place_profit_taking_orders(
                     
                     # Check if we should place a profit-taking sell order
                     if profit_pct >= profit_threshold:
-                        # Use "chasing limit order" strategy
-                        # Start at mid-price or slightly better, then aggressive
-                        # For now, we will be aggressive to secure the profit
-                        # Cross the spread immediately to get filled (taker fee is worth it for profit taking)
-                        if position.side == "YES":
-                            # We are selling YES shares
-                            # Bid price is what buyers are willing to pay us
-                            # We should sell AT or slightly BELOW bid to ensure fill
-                            best_bid = (yes_bid if yes_bid > 0 else last_price - 1) / 100
-                            # If we use current_price (which uses bid logic), we are safer
-                            # Use 1% below current price (bid) to ensure immediate execution
-                            sell_price = current_price * 0.99
-                        else:
-                            # We are selling NO shares
-                            # No bid is what buyes willing to pay
-                            best_bid = (no_bid if no_bid > 0 else (100 - last_price) - 1) / 100
-                            sell_price = current_price * 0.99
+                        # Use "chasing limit order" strategy - cross the spread to ensure fill
+                        # Sell at 1% below current bid price for immediate execution
+                        # (taker fee is worth it for profit-taking)
+                        
+                        # Price aggressively at 99% of current bid to ensure fill
+                        sell_price = current_price * 0.99
                         
                         # Safety check: ensure sell price is still profitable
-                        # If crossing spread erodes all profit, hold or limit at mid
+                        # If crossing spread erodes all profit, use conservative limit price
                         if sell_price <= position.entry_price * 1.05 and profit_pct > 0.10:
-                            # If we have 10%+ profit but crossing spread kills it, use limit at mid
-                            # But here we assume profit_threshold > 20% so we have buffer
+                            # If we have 10%+ profit but aggressive pricing kills it, 
+                            # use more conservative limit at 5% above entry
                             sell_price = max(sell_price, position.entry_price * 1.05)
 
-                        sell_price = max(0.01, sell_price)
+                        sell_price = max(0.01, sell_price)  # Floor at 1¢
                         
                         logger.info(f"💰 PROFIT TARGET HIT: {position.market_id} - {profit_pct:.1%} profit (${unrealized_pnl:.2f})")
                         
