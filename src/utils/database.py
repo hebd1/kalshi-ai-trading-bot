@@ -3,12 +3,36 @@ Database manager for the Kalshi trading system.
 """
 
 import os
+import asyncio
 import aiosqlite
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
+from functools import wraps
 
 from src.utils.logging_setup import TradingLoggerMixin
+
+
+def retry_on_locked_db(max_retries: int = 5, base_delay: float = 0.1):
+    """Decorator to retry database operations on lock errors."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except aiosqlite.OperationalError as e:
+                    if "database is locked" in str(e):
+                        last_exception = e
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)  # Exponential backoff
+                            await asyncio.sleep(delay)
+                            continue
+                    raise
+            raise last_exception
+        return wrapper
+    return decorator
 
 
 @dataclass
@@ -138,15 +162,21 @@ class DatabaseManager(TradingLoggerMixin):
             # Check environment variable first (for Docker), then use default
             db_path = os.getenv("DB_PATH", "trading_system.db")
         self.db_path = db_path
-        self.logger.info("Initializing database manager", db_path=db_path)
+        self.timeout = 30.0  # 30 second timeout for database operations
+        self.logger.info("Initializing database manager", db_path=db_path, timeout=self.timeout)
 
     async def initialize(self) -> None:
         """Initialize database schema and run migrations."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
+            # Enable WAL mode for better concurrency
+            await db.execute("PRAGMA journal_mode=WAL")
+            await db.execute("PRAGMA busy_timeout=30000")  # 30 second busy timeout
+            await db.commit()
+            
             await self._create_tables(db)
             await self._run_migrations(db)
             await db.commit()
-        self.logger.info("Database initialized successfully")
+        self.logger.info("Database initialized successfully with WAL mode enabled")
 
     async def _run_migrations(self, db: aiosqlite.Connection) -> None:
         """Run database migrations for schema updates."""
@@ -487,6 +517,7 @@ class DatabaseManager(TradingLoggerMixin):
         except Exception as e:
             self.logger.error(f"Error running migrations: {e}")
 
+    @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def upsert_markets(self, markets: List[Market]):
         """
         Upsert a list of markets into the database.
@@ -494,7 +525,7 @@ class DatabaseManager(TradingLoggerMixin):
         Args:
             markets: A list of Market dataclass objects.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             # SQLite STRFTIME arguments needs to be a string
             # and asdict converts datetime to datetime object
             # so we need to convert it to string manually
@@ -535,7 +566,7 @@ class DatabaseManager(TradingLoggerMixin):
         now_ts = int(datetime.now().timestamp())
         max_expiry_ts = now_ts + (max_days_to_expiry * 24 * 60 * 60)
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("""
                 SELECT * FROM markets
@@ -559,7 +590,7 @@ class DatabaseManager(TradingLoggerMixin):
         """
         Returns a set of market IDs that have associated open positions.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("""
                 SELECT DISTINCT market_id FROM positions WHERE status IN ('open', 'pending')
@@ -572,7 +603,7 @@ class DatabaseManager(TradingLoggerMixin):
         Checks if a position is currently being opened for a given market.
         This is to prevent race conditions where multiple workers try to open a position for the same market.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("""
                 SELECT market_id FROM positions WHERE market_id = ? AND status = 'pending' LIMIT 1
@@ -587,7 +618,7 @@ class DatabaseManager(TradingLoggerMixin):
         Returns:
             A list of Position objects.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM positions WHERE status = 'open' AND live = 0")
             rows = await cursor.fetchall()
@@ -606,7 +637,7 @@ class DatabaseManager(TradingLoggerMixin):
         Returns:
             A list of Position objects.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM positions WHERE status = 'open' AND live = 1")
             rows = await cursor.fetchall()
@@ -618,6 +649,7 @@ class DatabaseManager(TradingLoggerMixin):
                 positions.append(Position(**position_dict))
             return positions
 
+    @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def update_position_status(self, position_id: int, status: str):
         """
         Updates the status of a position.
@@ -626,7 +658,7 @@ class DatabaseManager(TradingLoggerMixin):
             position_id: The id of the position to update.
             status: The new status ('closed', 'voided').
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             await db.execute("""
                 UPDATE positions SET status = ? WHERE id = ?
             """, (status, position_id))
@@ -643,7 +675,7 @@ class DatabaseManager(TradingLoggerMixin):
         Returns:
             A Position object if found, otherwise None.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM positions WHERE market_id = ? AND status = 'open' LIMIT 1", (market_id,))
             row = await cursor.fetchone()
@@ -664,7 +696,7 @@ class DatabaseManager(TradingLoggerMixin):
         Returns:
             A Position object if found, otherwise None.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM positions WHERE market_id = ? AND side = ? AND status = 'open'", 
@@ -677,6 +709,7 @@ class DatabaseManager(TradingLoggerMixin):
                 return Position(**position_dict)
             return None
 
+    @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def add_trade_log(self, trade_log: TradeLog) -> None:
         """
         Add a trade log entry with duplicate prevention.
@@ -688,7 +721,7 @@ class DatabaseManager(TradingLoggerMixin):
         trade_dict['entry_timestamp'] = trade_log.entry_timestamp.isoformat()
         trade_dict['exit_timestamp'] = trade_log.exit_timestamp.isoformat()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             # Check for duplicate trade log entries to prevent phantom entries
             # A duplicate is defined as same market_id, side, exit_timestamp (within 1 minute)
             cursor = await db.execute("""
@@ -732,7 +765,7 @@ class DatabaseManager(TradingLoggerMixin):
         Returns:
             Dictionary with strategy names as keys and performance metrics as values.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             
             # Check if strategy column exists in trade_logs
@@ -861,7 +894,7 @@ class DatabaseManager(TradingLoggerMixin):
             query_dict = asdict(llm_query)
             query_dict['timestamp'] = llm_query.timestamp.isoformat()
             
-            async with aiosqlite.connect(self.db_path) as db:
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
                 await db.execute("""
                     INSERT INTO llm_queries (
                         timestamp, strategy, query_type, market_id, prompt, response,
@@ -886,7 +919,7 @@ class DatabaseManager(TradingLoggerMixin):
         try:
             cutoff_time = datetime.now() - timedelta(hours=hours_back)
             
-            async with aiosqlite.connect(self.db_path) as db:
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
                 db.row_factory = aiosqlite.Row
                 
                 # Check if llm_queries table exists
@@ -927,7 +960,7 @@ class DatabaseManager(TradingLoggerMixin):
     async def get_llm_stats_by_strategy(self) -> Dict[str, Dict]:
         """Get LLM usage statistics by strategy."""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
                 db.row_factory = aiosqlite.Row
                 
                 # Check if llm_queries table exists
@@ -978,6 +1011,7 @@ class DatabaseManager(TradingLoggerMixin):
         # for compatibility with other code that expects it
         pass
 
+    @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def record_market_analysis(
         self, 
         market_id: str, 
@@ -990,7 +1024,7 @@ class DatabaseManager(TradingLoggerMixin):
         now = datetime.now().isoformat()
         today = datetime.now().strftime('%Y-%m-%d')
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             # Record the analysis
             await db.execute("""
                 INSERT INTO market_analyses (market_id, analysis_timestamp, decision_action, confidence, cost_usd, analysis_type)
@@ -1014,7 +1048,7 @@ class DatabaseManager(TradingLoggerMixin):
         cutoff_time = datetime.now() - timedelta(hours=hours)
         cutoff_str = cutoff_time.isoformat()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             cursor = await db.execute("""
                 SELECT COUNT(*) FROM market_analyses 
                 WHERE market_id = ? AND analysis_timestamp > ?
@@ -1027,7 +1061,7 @@ class DatabaseManager(TradingLoggerMixin):
         if date is None:
             date = datetime.now().strftime('%Y-%m-%d')
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             cursor = await db.execute("""
                 SELECT total_ai_cost FROM daily_cost_tracking WHERE date = ?
             """, (date,))
@@ -1038,7 +1072,7 @@ class DatabaseManager(TradingLoggerMixin):
         """Get number of times market was analyzed today."""
         today = datetime.now().strftime('%Y-%m-%d')
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             cursor = await db.execute("""
                 SELECT COUNT(*) FROM market_analyses 
                 WHERE market_id = ? AND DATE(analysis_timestamp) = ?
@@ -1053,7 +1087,7 @@ class DatabaseManager(TradingLoggerMixin):
         Returns:
             A list of TradeLog objects.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM trade_logs")
             rows = await cursor.fetchall()
@@ -1074,7 +1108,7 @@ class DatabaseManager(TradingLoggerMixin):
             position_id: The ID of the position to update.
             entry_price: The actual entry price from the exchange.
         """
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             await db.execute("""
                 UPDATE positions 
                 SET live = 1, entry_price = ?
@@ -1083,6 +1117,7 @@ class DatabaseManager(TradingLoggerMixin):
             await db.commit()
         self.logger.info(f"Updated position {position_id} to live.")
 
+    @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def add_position(self, position: Position) -> Optional[int]:
         """
         Adds a new position to the database, or re-opens a closed one if it exists.
@@ -1099,7 +1134,7 @@ class DatabaseManager(TradingLoggerMixin):
             self.logger.warning(f"Open position already exists for market {position.market_id} and side {position.side}.")
             return None
 
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             position_dict = asdict(position)
             # aiosqlite does not support dataclasses with datetime objects
             position_dict['timestamp'] = position.timestamp.isoformat()
@@ -1157,7 +1192,7 @@ class DatabaseManager(TradingLoggerMixin):
 
     async def get_open_positions(self) -> List[Position]:
         """Get all open positions."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             cursor = await db.execute(
                 "SELECT * FROM positions WHERE status = 'open'"
             )
@@ -1213,7 +1248,7 @@ class DatabaseManager(TradingLoggerMixin):
             if order.filled_at:
                 order_dict['filled_at'] = order.filled_at.isoformat()
             
-            async with aiosqlite.connect(self.db_path) as db:
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
                 cursor = await db.execute("""
                     INSERT INTO orders (
                         market_id, side, action, order_type, price, quantity, status,
@@ -1249,7 +1284,7 @@ class DatabaseManager(TradingLoggerMixin):
         """Update the status of an order."""
         now = datetime.now().isoformat()
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             if status == 'filled' and fill_price:
                 await db.execute("""
                     UPDATE orders 
@@ -1268,7 +1303,7 @@ class DatabaseManager(TradingLoggerMixin):
 
     async def get_pending_orders(self, market_id: Optional[str] = None) -> List[Order]:
         """Get all pending orders, optionally filtered by market."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             
             if market_id:
@@ -1297,7 +1332,7 @@ class DatabaseManager(TradingLoggerMixin):
 
     async def get_orders_by_position(self, position_id: int) -> List[Order]:
         """Get all orders for a specific position."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT * FROM orders WHERE position_id = ? ORDER BY created_at DESC",
@@ -1330,7 +1365,7 @@ class DatabaseManager(TradingLoggerMixin):
             The ID of the inserted record, or None on failure.
         """
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
                 cursor = await db.execute("""
                     INSERT INTO balance_history (
                         timestamp, cash_balance, position_value, total_value,
@@ -1363,7 +1398,7 @@ class DatabaseManager(TradingLoggerMixin):
         """Get balance history for the specified time period."""
         cutoff_time = datetime.now() - timedelta(hours=hours_back)
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("""
                 SELECT * FROM balance_history 
@@ -1384,7 +1419,7 @@ class DatabaseManager(TradingLoggerMixin):
 
     async def get_latest_balance(self) -> Optional[BalanceSnapshot]:
         """Get the most recent balance snapshot."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("""
                 SELECT * FROM balance_history ORDER BY timestamp DESC LIMIT 1
@@ -1402,7 +1437,7 @@ class DatabaseManager(TradingLoggerMixin):
     async def record_api_latency(self, record: APILatencyRecord) -> None:
         """Record an API latency measurement."""
         try:
-            async with aiosqlite.connect(self.db_path) as db:
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
                 await db.execute("""
                     INSERT INTO api_latency (
                         timestamp, endpoint, method, latency_ms, status_code, success
@@ -1424,7 +1459,7 @@ class DatabaseManager(TradingLoggerMixin):
         """Get API latency statistics for the specified time period."""
         cutoff_time = datetime.now() - timedelta(hours=hours_back)
         
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
             db.row_factory = aiosqlite.Row
             
             cursor = await db.execute("""
