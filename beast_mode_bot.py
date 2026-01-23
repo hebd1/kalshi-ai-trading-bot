@@ -544,18 +544,28 @@ class BeastModeBot:
         """
         if not settings.trading.enable_daily_cost_limiting:
             return True
-        
-        # Check daily tracker in xAI client
-        if hasattr(xai_client, 'daily_tracker') and xai_client.daily_tracker.is_exhausted:
-            self.logger.warning(
-                "🚫 Daily AI cost limit reached - trading paused",
-                daily_cost=xai_client.daily_tracker.total_cost,
-                daily_limit=xai_client.daily_tracker.daily_limit,
-                requests_today=xai_client.daily_tracker.request_count
-            )
-            return False
-        
-        return True
+
+        try:
+            # Use xAI client's authoritative async check which consults the DB and tracker
+            can_proceed = await xai_client._check_daily_limits()
+            if not can_proceed:
+                # Log an aligned warning using DB cost for clarity
+                try:
+                    today_cost = await (xai_client.db_manager.get_daily_ai_cost() if xai_client.db_manager else 0.0)
+                except Exception:
+                    today_cost = getattr(xai_client.daily_tracker, 'total_cost', 0.0)
+
+                self.logger.warning(
+                    "🚫 Daily AI cost limit reached - trading paused",
+                    daily_cost=today_cost,
+                    daily_limit=getattr(settings.trading, 'daily_ai_budget', getattr(xai_client.daily_tracker, 'daily_limit', None)),
+                    requests_today=getattr(xai_client.daily_tracker, 'request_count', 0)
+                )
+            return can_proceed
+        except Exception as e:
+            # Fail-safe: if check errors, allow trading but log issue
+            self.logger.error(f"Error checking daily AI limits: {e}")
+            return True
 
     async def _sleep_until_next_day(self):
         """Sleep until the next day (midnight) when daily limits reset."""

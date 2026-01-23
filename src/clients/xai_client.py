@@ -177,13 +177,39 @@ class XAIClient(TradingLoggerMixin):
         """
         Check if we should pause due to daily limits.
         Returns True if we can proceed, False if we should sleep.
+
+        This method consults both the local daily tracker (pickle) and the
+        authoritative database record (if available) and uses the unified
+        `settings.trading.daily_ai_budget` as the primary limit.
         """
         # Reload tracker to get latest state
         self.daily_tracker = self._load_daily_tracker()
         
+        # Primary limit value (prefer unified setting)
+        configured_budget = getattr(settings.trading, 'daily_ai_budget', self.daily_tracker.daily_limit)
+        
+        # First: check database authoritative value if db manager available
+        if self.db_manager:
+            try:
+                today_cost = await self.db_manager.get_daily_ai_cost()
+                if today_cost >= configured_budget:
+                    # Mark exhausted and persist
+                    self.daily_tracker.is_exhausted = True
+                    self.daily_tracker.last_exhausted_time = datetime.now()
+                    self._save_daily_tracker()
+                    self.logger.warning(
+                        "Daily AI limit reached via DB check - request skipped",
+                        daily_cost=today_cost,
+                        daily_limit=configured_budget
+                    )
+                    return False
+            except Exception as e:
+                # Don't hard-fail on DB check errors; log and fall back to local tracker
+                self.logger.debug(f"Error checking daily AI cost from DB: {e}")
+        
+        # Fallback to local tracker state
         if self.daily_tracker.is_exhausted:
             now = datetime.now()
-            
             # Check if it's a new day
             if self.daily_tracker.date != now.strftime("%Y-%m-%d"):
                 # New day - reset tracker
@@ -192,13 +218,9 @@ class XAIClient(TradingLoggerMixin):
                     daily_limit=self.daily_tracker.daily_limit
                 )
                 self._save_daily_tracker()
-                
-                self.logger.info(
-                    "New day - daily AI limits reset",
-                    daily_limit=self.daily_tracker.daily_limit
-                )
+                self.logger.info("New day - daily AI limits reset", daily_limit=self.daily_tracker.daily_limit)
                 return True
-            
+
             # Still the same day and exhausted
             self.logger.info(
                 "Daily AI limit reached - request skipped",
@@ -206,7 +228,8 @@ class XAIClient(TradingLoggerMixin):
                 daily_limit=self.daily_tracker.daily_limit
             )
             return False
-        
+
+        # If neither DB nor tracker indicate exhaustion, allow requests
         return True
 
     async def _handle_resource_exhausted_error(self, error_msg: str):
