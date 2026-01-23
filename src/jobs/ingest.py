@@ -66,8 +66,8 @@ async def process_and_queue_markets(
         logger.info(f"Successfully upserted {len(markets_to_upsert)} markets.")
 
         # Primary filtering criteria - MORE PERMISSIVE FOR MORE OPPORTUNITIES!
-        min_volume: float = 50.0  # DECREASED: Even lower volume threshold (was 100, now 50)
-        min_volume_for_ai_analysis: float = 50.0  # DECREASED: Lower volume for AI analysis (was 150, now 50)  
+        min_volume: float = settings.trading.min_volume  # Use settings instead of hardcoded value
+        min_volume_for_ai_analysis: float = settings.trading.min_volume_for_ai_analysis  # Use settings  
         preferred_categories: List[str] = []  # Empty = all categories allowed
         excluded_categories: List[str] = []  # Empty = no categories excluded
 

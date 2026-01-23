@@ -49,6 +49,7 @@ from src.strategies.quick_flip_scalping import (
     run_quick_flip_strategy,
     QuickFlipConfig
 )
+from src.strategies.arbitrage_scanner import ArbitrageScanner
 
 
 @dataclass
@@ -213,6 +214,8 @@ class UnifiedAdvancedTradingSystem:
         # Initialize strategy modules with actual capital
         self.market_maker = AdvancedMarketMaker(self.db_manager, self.kalshi_client, self.xai_client)
         self.portfolio_optimizer = AdvancedPortfolioOptimizer(self.db_manager, self.kalshi_client, self.xai_client)
+        # Use 1% fee estimate for conservative arbitrage calculation to ensure net profit
+        self.arbitrage_scanner = ArbitrageScanner(self.kalshi_client, self.db_manager, fee_pct=0.01)
         
         self.logger.info(f"🎯 CAPITAL ALLOCATION: Market Making=${self.market_making_capital:.2f}, Directional=${self.directional_capital:.2f}, Quick Flip=${self.quick_flip_capital:.2f}, Arbitrage=${self.arbitrage_capital:.2f}")
 
@@ -265,7 +268,7 @@ class UnifiedAdvancedTradingSystem:
             
             # Step 1: Get ALL available markets (no time restrictions) - MORE PERMISSIVE VOLUME
             markets = await self.db_manager.get_eligible_markets(
-            volume_min=200,  # DECREASED: Much lower volume requirement (was 50,000, now 200) for more opportunities
+            volume_min=settings.trading.min_volume,  # Use settings instead of hardcoded 200
             max_days_to_expiry=365  # Accept any timeline with dynamic exits
         )
             if not markets:
@@ -640,20 +643,55 @@ class UnifiedAdvancedTradingSystem:
 
     async def _execute_arbitrage_strategy(self, markets: List[Market]) -> Dict:
         """
-        Execute arbitrage opportunities (placeholder for future implementation).
+        Execute arbitrage opportunities.
         """
         try:
-            # TODO: Implement cross-market arbitrage detection
-            # This could include:
-            # - Kalshi vs Polymarket price differences
-            # - Related market arbitrage (correlated events)
-            # - Temporal arbitrage (same event, different expiries)
+            self.logger.info("🎯 Executing Arbitrage Strategy...")
             
-            self.logger.info("🎯 Arbitrage opportunities analysis (future feature)")
+            # 1. Scan for opportunities
+            opportunities = await self.arbitrage_scanner.scan_opportunities()
+            
+            if not opportunities:
+                self.logger.info("No arbitrage opportunities found.")
+                return {'arbitrage_trades': 0, 'arbitrage_profit': 0.0, 'arbitrage_exposure': 0.0}
+            
+            # 2. Sort by ROI and execute top ones
+            opportunities.sort(key=lambda x: x.roi, reverse=True)
+            
+            total_profit = 0.0
+            total_trades = 0
+            total_exposure = 0.0
+            
+            # Limit number of arbitrage executions per cycle to manage complexity for now
+            max_executions = 3 
+            
+            live_mode = getattr(settings.trading, 'live_trading_enabled', False)
+            
+            for opp in opportunities[:max_executions]:
+                # Check if we have enough capital allocated
+                if total_exposure >= self.arbitrage_capital:
+                    break
+                    
+                remaining_capital = self.arbitrage_capital - total_exposure
+                
+                # Execute
+                result = await self.arbitrage_scanner.execute_arbitrage(opp, remaining_capital, live_mode=live_mode)
+                
+                if result.get('legs_filled', 0) > 0:
+                    total_trades += 1
+                    total_exposure += result.get('total_cost', 0.0)
+                    total_profit += result.get('profit_locked', 0.0)
+            
+            self.logger.info(
+                f"✅ Arbitrage: {total_trades} trades executed, "
+                f"${total_exposure:.2f} exposure, "
+                f"${total_profit:.2f} locked profit"
+            )
+            
             return {
-                'arbitrage_trades': 0,
-                'arbitrage_profit': 0.0,
-                'arbitrage_exposure': 0.0
+                'arbitrage_trades': total_trades,
+                'arbitrage_profit': total_profit,
+                'arbitrage_exposure': total_exposure
             }
             
         except Exception as e:

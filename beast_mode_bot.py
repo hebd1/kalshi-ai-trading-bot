@@ -27,7 +27,6 @@ import signal
 from datetime import datetime, timedelta
 from typing import Optional
 
-from src.jobs.trade import run_trading_job
 from src.jobs.ingest import run_ingestion
 from src.jobs.track import run_tracking
 from src.jobs.evaluate import run_evaluation
@@ -136,13 +135,27 @@ class BeastModeBot:
             
             # Run remaining background tasks
             self.logger.info("🚀 Starting trading and monitoring tasks...")
-            tasks = [
-                ingestion_task,  # Already started
-                asyncio.create_task(self._run_trading_cycles(db_manager, kalshi_client, xai_client)),
-                asyncio.create_task(self._run_position_tracking(db_manager, kalshi_client)),
-                asyncio.create_task(self._run_performance_evaluation(db_manager)),
-                asyncio.create_task(self._run_balance_tracking(db_manager, kalshi_client))  # NEW: Balance tracking
-            ]
+            self.logger.info("📋 Creating trading cycle task...")
+            trading_task = asyncio.create_task(self._run_trading_cycles(db_manager, kalshi_client, xai_client))
+            self.logger.info("📋 Creating position tracking task...")
+            tracking_task = asyncio.create_task(self._run_position_tracking(db_manager, kalshi_client))
+            self.logger.info("📋 Creating performance evaluation task...")
+            eval_task = asyncio.create_task(self._run_performance_evaluation(db_manager))
+            self.logger.info("📋 Creating balance tracking task...")
+            balance_task = asyncio.create_task(self._run_balance_tracking(db_manager, kalshi_client))
+            
+            try:
+                tasks = [
+                    ingestion_task,  # Already started
+                    trading_task,
+                    tracking_task,
+                    eval_task,
+                    balance_task
+                ]
+                self.logger.info("✅ All trading tasks created successfully")
+            except Exception as e:
+                self.logger.error(f"❌ Failed to create trading tasks: {e}")
+                return
             
             # Setup shutdown handler
             def signal_handler():
@@ -477,10 +490,13 @@ class BeastModeBot:
 
     async def _run_trading_cycles(self, db_manager: DatabaseManager, kalshi_client: KalshiClient, xai_client: XAIClient):
         """Main Beast Mode trading cycles."""
+        self.logger.info("🎯 TRADING CYCLES METHOD STARTED")
         cycle_count = 0
         
         while not self.shutdown_event.is_set():
             try:
+                self.logger.debug(f"🔄 Trading cycle loop iteration #{cycle_count + 1}")
+                
                 # Check daily AI cost limits before starting cycle
                 if not await self._check_daily_ai_limits(xai_client):
                     # Sleep until next day if limits reached
@@ -491,7 +507,14 @@ class BeastModeBot:
                 self.logger.info(f"🔄 Starting Beast Mode Trading Cycle #{cycle_count}")
                 
                 # Run the Beast Mode unified trading system
-                results = await run_trading_job()
+                self.logger.info(f"🚀 Initializing unified trading system for cycle #{cycle_count}")
+                from src.strategies.unified_trading_system import UnifiedAdvancedTradingSystem
+                unified_system = UnifiedAdvancedTradingSystem(db_manager, kalshi_client, xai_client)
+                await unified_system.async_initialize()
+                self.logger.info(f"✅ Unified system initialized for cycle #{cycle_count}")
+                
+                results = await unified_system.execute_unified_trading_strategy()
+                self.logger.info(f"✅ Unified system executed for cycle #{cycle_count}")
                 
                 if results and results.total_positions > 0:
                     self.logger.info(
@@ -504,10 +527,14 @@ class BeastModeBot:
                     self.logger.info(f"📊 Cycle #{cycle_count} Complete - No new positions created")
                 
                 # Wait for next cycle (60 seconds)
+                self.logger.debug(f"⏰ Sleeping for 60 seconds before next cycle")
                 await asyncio.sleep(60)
                 
             except Exception as e:
                 self.logger.error(f"Error in trading cycle #{cycle_count}: {e}")
+                self.logger.error(f"Exception type: {type(e).__name__}")
+                import traceback
+                self.logger.error(f"Traceback: {traceback.format_exc()}")
                 await asyncio.sleep(60)
 
     async def _check_daily_ai_limits(self, xai_client: XAIClient) -> bool:

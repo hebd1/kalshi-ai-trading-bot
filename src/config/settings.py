@@ -80,7 +80,7 @@ class TradingConfig:
     min_balance: float = 50.0           # REDUCED: Lower minimum to trade more (was 100)
     
     # Market filtering criteria - BALANCED
-    min_volume: float = 500.0            # INCREASED: Higher volume requirement (increased from 200 to 500 for quality)
+    min_volume: float = 200.0            # INCREASED: Higher volume requirement (increased from 200)
     max_time_to_expiry_days: int = 30    # INCREASED: Allow longer timeframes (was 14, now 30)
     
     # AI decision making - BALANCED THRESHOLDS
@@ -230,7 +230,7 @@ performance_monitoring: bool = True     # Enable performance monitoring
 
 # === ADVANCED FEATURES ===
 # Cutting-edge features for maximum performance
-cross_market_arbitrage: bool = False    # Enable when arbitrage module ready
+cross_market_arbitrage: bool = True     # Enabled arbitrage module
 multi_model_ensemble: bool = False      # Use multiple AI models (future)
 sentiment_analysis: bool = False        # News sentiment analysis (future)
 options_strategies: bool = False        # Complex options strategies (future)
