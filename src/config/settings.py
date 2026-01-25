@@ -204,15 +204,15 @@ max_orders_per_market: int = 4          # Maximum orders per market (2 each side
 # === MARKET SELECTION (BALANCED FOR QUALITY) ===
 # Removed time restrictions - trade ANY deadline with dynamic exits!
 # max_time_to_expiry_days: REMOVED      # No longer used - trade any timeline!
-min_volume_for_analysis: float = 500.0  # INCREASED: Higher minimum volume (increased from 200 to 500 for quality)
-min_volume_for_market_making: float = 500.0  # DECREASED: Lower volume for market making (was 2000, now 500)
+min_volume_for_analysis: float = 300.0  # INCREASED: Higher minimum volume (increased from 200 to 500 for quality)
+min_volume_for_market_making: float = 300.0  # DECREASED: Lower volume for market making (was 2000, now 500)
 min_price_movement: float = 0.02        # DECREASED: Lower minimum range (was 0.05, now 2¢)
 max_bid_ask_spread: float = 0.15        # INCREASED: Allow wider spreads (was 0.10, now 15¢)
 min_confidence_long_term: float = 0.45  # DECREASED: Lower confidence for distant expiries (was 0.65, now 45%)
 
 # === COST OPTIMIZATION (MORE GENEROUS) ===
 # Enhanced cost controls for the beast mode system
-daily_ai_budget: float = 15.0           # INCREASED: Higher budget for more opportunities (was 10.0, now 15.0)
+daily_ai_budget: float = 1.0           # INCREASED: Higher budget for more opportunities (was 10.0, now 15.0)
 max_ai_cost_per_decision: float = 0.12  # INCREASED: Higher per-decision limit (was 0.08, now 0.12)
 analysis_cooldown_hours: int = 2        # DECREASED: Much shorter cooldown (was 4, now 2)
 max_analyses_per_market_per_day: int = 6  # INCREASED: More analyses per day (was 3, now 6)
