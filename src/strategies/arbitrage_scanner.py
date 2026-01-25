@@ -342,7 +342,7 @@ class ArbitrageScanner:
                 confidence=1.0, # Mathematical certainty (model assumption)
                 live=live_mode,
                 status='open',
-                strategy='arbitrage_no_resolution'
+                strategy='arbitrage'  # Must match monitoring/summary filters
             )
             
             # Insert position

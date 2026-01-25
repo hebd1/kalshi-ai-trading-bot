@@ -166,7 +166,7 @@ async def verify_database_health():
             try:
                 cursor = await db.execute("SELECT COUNT(*) FROM llm_queries")
                 llm_count = (await cursor.fetchone())[0]
-            except:
+            except Exception:
                 llm_count = "Table not created yet"
         
         print(f"📊 Markets: {markets_count}")

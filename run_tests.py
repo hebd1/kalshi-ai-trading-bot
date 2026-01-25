@@ -48,7 +48,7 @@ def run_command_live(command, description):
         print(f"\n⏹️ {description} - CANCELLED by user")
         try:
             process.terminate()
-        except:
+        except OSError:
             pass
         return False
     except Exception as e:

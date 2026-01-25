@@ -99,7 +99,7 @@ async def comprehensive_analysis():
                                         or (100 - market_info.get('last_price', 50))) / 100
                     position_value = abs(quantity) * current_price
                     total_position_value += position_value
-                except:
+                except Exception:
                     # Fallback estimate
                     total_position_value += abs(quantity) * 0.50
         

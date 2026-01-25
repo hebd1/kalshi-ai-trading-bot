@@ -632,7 +632,7 @@ def show_overview(performance_data, positions, system_health_data):
             try:
                 timestamp = datetime.fromisoformat(pos['timestamp'])
                 time_str = timestamp.strftime('%m/%d %H:%M')
-            except:
+            except (ValueError, TypeError, KeyError):
                 time_str = 'Unknown'
             
             entry_price = pos.get('entry_price', 0.50)
@@ -986,7 +986,7 @@ def show_positions_trades(positions):
         try:
             timestamp = datetime.fromisoformat(pos['timestamp'])
             time_str = timestamp.strftime('%m/%d %H:%M')
-        except:
+        except (ValueError, TypeError, KeyError):
             time_str = 'Unknown'
         
         entry_price = pos.get('entry_price', 0.50)
