@@ -33,6 +33,20 @@ from src.config.settings import settings
 # Configure for PRODUCTION environment (not demo)
 settings.api.configure_environment(use_live=True)
 
+def _map_strategy_name(internal_name: str) -> str:
+    """Map internal strategy names to user-friendly display names."""
+    strategy_mapping = {
+        'portfolio_optimization': 'Directional Trading',
+        'immediate_portfolio_optimization': 'Directional Trading',
+        'directional_trading': 'Directional Trading',
+        'high_confidence': 'High Confidence',
+        'quick_flip_scalping': 'Quick Flip Scalping',
+        'market_making': 'Market Making',
+        'arbitrage': 'Arbitrage',
+        'arbitrage_no_resolution': 'Arbitrage'
+    }
+    return strategy_mapping.get(internal_name, internal_name.replace('_', ' ').title())
+
 # Configure Streamlit page
 st.set_page_config(
     page_title="Trading System Dashboard",
@@ -96,14 +110,24 @@ def load_performance_data():
             # Get performance by strategy - ensure it's serializable
             performance_raw = await db_manager.get_performance_by_strategy()
             
+            # Filter to only BOT strategies (exclude sync, legacy, etc.)
+            bot_strategies = {}
+            non_bot_strategies = {'legacy_untracked', 'startup_sync', 'sync_recovery'}
+            
+            for strategy, stats in performance_raw.items():
+                if strategy not in non_bot_strategies:
+                    # Map internal strategy names to user-friendly names
+                    friendly_name = _map_strategy_name(strategy)
+                    bot_strategies[friendly_name] = stats
+            
             # Convert performance data to ensure serializability with totals
             performance = {}
             total_trades = 0
             total_wins = 0
             
-            if performance_raw:
-                for strategy, stats in performance_raw.items():
-                    performance[str(strategy)] = {
+            if bot_strategies:
+                for strategy, stats in bot_strategies.items():
+                    performance[strategy] = {
                         str(k): float(v) if isinstance(v, (int, float)) else str(v) 
                         for k, v in stats.items()
                     }
@@ -498,11 +522,12 @@ def show_overview(performance_data, positions, system_health_data):
         )
     
     with col2b:
-        # Calculate realized P&L from completed trades
-        realized_pnl = sum(stats.get('total_pnl', 0) for stats in performance_data.values()) if performance_data else 0
+        # Calculate realized P&L from BOT strategies only (exclude sync/legacy)
+        bot_performance_data = {k: v for k, v in performance_data.items() if k != '_totals'}
+        realized_pnl = sum(stats.get('total_pnl', 0) for stats in bot_performance_data.values()) if bot_performance_data else 0
         
         # Calculate unrealized P&L (excluding legacy)
-        bot_unrealized_pnl = sum(p.get('unrealized_pnl', 0) for p in positions if p.get('strategy') != 'startup_sync')
+        bot_unrealized_pnl = sum(p.get('unrealized_pnl', 0) for p in positions if p.get('strategy') not in ['startup_sync', 'legacy_untracked'])
         total_pnl = realized_pnl + bot_unrealized_pnl
         
         # Color the delta based on unrealized P&L
@@ -528,31 +553,33 @@ def show_overview(performance_data, positions, system_health_data):
         )
     
     with col4b:
-        # Win rate across all strategies
-        total_wins = sum(stats.get('winning_trades', 0) for stats in performance_data.values()) if performance_data else 0
-        total_completed = sum(stats.get('completed_trades', 0) for stats in performance_data.values()) if performance_data else 0
+        # Win rate across bot strategies only
+        bot_performance_data = {k: v for k, v in performance_data.items() if k != '_totals'}
+        total_wins = sum(stats.get('winning_trades', 0) for stats in bot_performance_data.values()) if bot_performance_data else 0
+        total_completed = sum(stats.get('completed_trades', 0) for stats in bot_performance_data.values()) if bot_performance_data else 0
         win_rate = (total_wins / total_completed * 100) if total_completed > 0 else 0
         st.metric(
             label="🏆 Win Rate",
             value=f"{win_rate:.1f}%",
-            help="Percentage of winning trades across all strategies"
+            help="Percentage of winning trades across bot strategies"
         )
     
     # Strategy performance summary
     if performance_data:
         st.subheader("🎯 Strategy Performance Summary")
         
-        # Create strategy performance chart
+        # Create strategy performance chart (only bot strategies)
         strategy_names = []
         strategy_pnl = []
         strategy_trades = []
         strategy_win_rates = []
         
         for strategy, stats in performance_data.items():
-            strategy_names.append(strategy.replace('_', ' ').title())
-            strategy_pnl.append(stats.get('total_pnl', 0))
-            strategy_trades.append(stats.get('completed_trades', 0))
-            strategy_win_rates.append(stats.get('win_rate_pct', 0))
+            if strategy != '_totals':  # Skip totals entry
+                strategy_names.append(strategy)  # Already mapped to friendly names
+                strategy_pnl.append(stats.get('total_pnl', 0))
+                strategy_trades.append(stats.get('completed_trades', 0))
+                strategy_win_rates.append(stats.get('win_rate_pct', 0))
         
         col1, col2 = st.columns(2)
         
@@ -646,8 +673,8 @@ def show_strategy_performance(performance_data):
         st.warning("No strategy performance data available yet.")
         return
     
-    # Strategy selector
-    strategies = list(performance_data.keys())
+    # Strategy selector (only bot strategies)
+    strategies = [k for k in performance_data.keys() if k != '_totals']
     selected_strategy = st.selectbox(
         "Select Strategy for Detailed Analysis",
         ["All Strategies"] + strategies
@@ -660,17 +687,18 @@ def show_strategy_performance(performance_data):
         # Create comparison table
         comparison_data = []
         for strategy, stats in performance_data.items():
-            comparison_data.append({
-                'Strategy': strategy.replace('_', ' ').title(),
-                'Completed Trades': stats.get('completed_trades', 0),
-                'Total P&L': f"${stats.get('total_pnl', 0):.2f}",
-                'Avg P&L per Trade': f"${stats.get('avg_pnl_per_trade', 0):.2f}",
-                'Win Rate': f"{stats.get('win_rate_pct', 0):.1f}%",
-                'Best Trade': f"${stats.get('best_trade', 0):.2f}",
-                'Worst Trade': f"${stats.get('worst_trade', 0):.2f}",
-                'Open Positions': stats['open_positions'],
-                'Capital Deployed': f"${stats['capital_deployed']:.2f}"
-            })
+            if strategy != '_totals':  # Skip totals entry
+                comparison_data.append({
+                    'Strategy': strategy,  # Already mapped to friendly names
+                    'Completed Trades': stats.get('completed_trades', 0),
+                    'Total P&L': f"${stats.get('total_pnl', 0):.2f}",
+                    'Avg P&L per Trade': f"${stats.get('avg_pnl_per_trade', 0):.2f}",
+                    'Win Rate': f"{stats.get('win_rate_pct', 0):.1f}%",
+                    'Best Trade': f"${stats.get('best_trade', 0):.2f}",
+                    'Worst Trade': f"${stats.get('worst_trade', 0):.2f}",
+                    'Open Positions': stats['open_positions'],
+                    'Capital Deployed': f"${stats['capital_deployed']:.2f}"
+                })
         
         df = pd.DataFrame(comparison_data)
         st.dataframe(df, use_container_width=True, hide_index=True)
@@ -683,12 +711,12 @@ def show_strategy_performance(performance_data):
             fig_risk = go.Figure()
             
             for strategy, stats in performance_data.items():
-                if stats.get('completed_trades', 0) > 0:
+                if strategy != '_totals' and stats.get('completed_trades', 0) > 0:
                     fig_risk.add_trace(go.Scatter(
                         x=[stats.get('avg_pnl_per_trade', 0)],
                         y=[stats.get('win_rate_pct', 0)],
                         mode='markers+text',
-                        text=[strategy.replace('_', ' ').title()],
+                        text=[strategy],  # Already mapped to friendly names
                         textposition="top center",
                         marker=dict(
                             size=stats['completed_trades'] * 2,
@@ -710,8 +738,8 @@ def show_strategy_performance(performance_data):
         with col2:
             # Capital deployment
             fig_capital = px.pie(
-                values=[stats['capital_deployed'] for stats in performance_data.values()],
-                names=[strategy.replace('_', ' ').title() for strategy in performance_data.keys()],
+                values=[stats['capital_deployed'] for stats in performance_data.values() if stats != performance_data.get('_totals', {})],
+                names=[strategy for strategy in performance_data.keys() if strategy != '_totals'],
                 title="Capital Deployment by Strategy"
             )
             fig_capital.update_layout(height=500)
