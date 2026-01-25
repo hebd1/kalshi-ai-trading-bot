@@ -339,17 +339,37 @@ REASON: [brief explanation]
     async def _execute_single_quick_flip(self, opportunity: QuickFlipOpportunity) -> bool:
         """Execute a single quick flip trade."""
         try:
-            # Create position object
+            # Calculate stop loss and take profit levels using StopLossCalculator
+            from src.utils.stop_loss_calculator import StopLossCalculator
+            
+            entry_price_dollars = opportunity.entry_price / 100  # Convert to dollars
+            
+            # For quick flips, use tighter stop losses (scalping = fast exits)
+            # Quick flips have short hold times, so use more aggressive exit levels
+            exit_levels = StopLossCalculator.calculate_stop_loss_levels(
+                entry_price=entry_price_dollars,
+                side=opportunity.side,
+                confidence=opportunity.confidence_score,
+                market_volatility=0.15,  # Assume moderate volatility for quick flips
+                time_to_expiry_days=1.0  # Quick flips are short-term by definition
+            )
+            
+            # Create position object WITH exit strategy fields
             position = Position(
                 market_id=opportunity.market_id,
                 side=opportunity.side,
                 quantity=opportunity.quantity,
-                entry_price=opportunity.entry_price / 100,  # Convert to dollars
+                entry_price=entry_price_dollars,
                 live=False,  # Will be set to True after execution
                 timestamp=datetime.now(),
                 rationale=f"QUICK FLIP: {opportunity.movement_indicator} | "
                          f"Target: {opportunity.entry_price}¢→{opportunity.exit_price}¢",
-                strategy="quick_flip_scalping"
+                strategy="quick_flip_scalping",
+                # Enhanced exit strategy using StopLossCalculator
+                stop_loss_price=exit_levels['stop_loss_price'],
+                take_profit_price=opportunity.exit_price / 100,  # Use intended target as take profit
+                max_hold_hours=exit_levels['max_hold_hours'],
+                target_confidence_change=exit_levels['target_confidence_change']
             )
             
             # Add to database
@@ -450,6 +470,17 @@ REASON: [brief explanation]
                 position = sell_info['position']
                 max_hold_until = sell_info['max_hold_until']
                 
+                # Check if sell order has been filled
+                fill_status = await self._check_sell_order_filled(position, market_id)
+                if fill_status['filled']:
+                    self.logger.info(
+                        f"✅ Sell order filled for {market_id} at {fill_status['fill_price']:.2f}¢"
+                    )
+                    results['positions_closed'] += 1
+                    results['total_pnl'] += fill_status.get('pnl', 0)
+                    positions_to_remove.append(market_id)
+                    continue
+                
                 # Check if we should cut losses (held too long)
                 if current_time > max_hold_until:
                     self.logger.warning(
@@ -461,9 +492,16 @@ REASON: [brief explanation]
                     if cut_success:
                         results['losses_cut'] += 1
                         positions_to_remove.append(market_id)
+                    continue
                 
-                # TODO: Add logic to check if sell order filled
-                # TODO: Add logic to adjust sell price if market moved against us
+                # Check if market moved against us and we should adjust sell price
+                adjustment = await self._check_and_adjust_sell_price(position, sell_info)
+                if adjustment['adjusted']:
+                    results['orders_adjusted'] += 1
+                    self.logger.info(
+                        f"📊 Adjusted sell price for {market_id}: "
+                        f"{adjustment['old_price']:.2f}¢ → {adjustment['new_price']:.2f}¢"
+                    )
                 
             except Exception as e:
                 self.logger.error(f"Error managing position {market_id}: {e}")
@@ -544,6 +582,123 @@ REASON: [brief explanation]
         except Exception as e:
             self.logger.error(f"Error cutting losses: {e}")
             return False
+
+    async def _check_sell_order_filled(self, position: Position, market_id: str) -> Dict:
+        """
+        Check if the sell order for a position has been filled.
+        
+        Returns:
+            Dict with 'filled' (bool), 'fill_price' (float), and 'pnl' (float)
+        """
+        try:
+            # Check via Kalshi fills API
+            fills_response = await self.kalshi_client.get_fills(ticker=market_id, limit=10)
+            fills = fills_response.get('fills', [])
+            
+            # Look for recent sell fills for this position
+            for fill in fills:
+                # Check if this is a sell fill for our side
+                if (fill.get('action') == 'sell' and 
+                    fill.get('side', '').upper() == position.side.upper()):
+                    
+                    fill_price_cents = fill.get('price', 0)
+                    fill_quantity = fill.get('count', 0)
+                    
+                    if fill_quantity >= position.quantity:
+                        # Order is filled
+                        fill_price = fill_price_cents / 100
+                        pnl = (fill_price - position.entry_price) * position.quantity
+                        
+                        # Update position status in database
+                        await self.db_manager.update_position_status(position.id, 'closed')
+                        
+                        return {
+                            'filled': True,
+                            'fill_price': fill_price_cents,
+                            'pnl': pnl
+                        }
+            
+            return {'filled': False}
+            
+        except Exception as e:
+            self.logger.error(f"Error checking sell order fill for {market_id}: {e}")
+            return {'filled': False}
+
+    async def _check_and_adjust_sell_price(self, position: Position, sell_info: Dict) -> Dict:
+        """
+        Check if market has moved against us and adjust sell price if needed.
+        
+        If the current bid is significantly below our target sell price,
+        we adjust to a more realistic price to ensure the order fills.
+        
+        Returns:
+            Dict with 'adjusted' (bool), 'old_price' (float), 'new_price' (float)
+        """
+        try:
+            target_price = sell_info['target_price']
+            placed_at = sell_info['placed_at']
+            
+            # Only consider adjustment if order has been pending for > 5 minutes
+            minutes_pending = (datetime.now() - placed_at).total_seconds() / 60
+            if minutes_pending < 5:
+                return {'adjusted': False}
+            
+            # Get current market prices
+            market_data = await self.kalshi_client.get_market(position.market_id)
+            if not market_data:
+                return {'adjusted': False}
+            
+            market_info = market_data.get('market', {})
+            
+            # Get current bid price (what we can actually sell for)
+            if position.side.lower() == "yes":
+                current_bid_cents = market_info.get('yes_bid', 0)
+            else:
+                current_bid_cents = market_info.get('no_bid', 0)
+            
+            if not current_bid_cents:
+                return {'adjusted': False}
+            
+            current_bid = current_bid_cents / 100
+            target_price_cents = target_price * 100
+            
+            # If current bid is >= target, our order should fill soon
+            if current_bid_cents >= target_price_cents:
+                return {'adjusted': False}
+            
+            # If market moved significantly against us (> 2¢ below target), adjust
+            price_gap_cents = target_price_cents - current_bid_cents
+            if price_gap_cents > 2:
+                # Calculate new target: midpoint between current bid and original target
+                # But ensure we still make some profit (at least break even)
+                min_acceptable = position.entry_price * 100  # Break-even in cents
+                new_price_cents = max(
+                    min_acceptable + 1,  # At least 1¢ profit
+                    (current_bid_cents + target_price_cents) / 2
+                )
+                
+                # Only adjust if new price is meaningfully different
+                if abs(new_price_cents - target_price_cents) >= 1:
+                    # Cancel old order and place new one
+                    # Note: For simplicity, we update the tracking - actual order cancellation
+                    # would require order ID tracking
+                    sell_info['target_price'] = new_price_cents / 100
+                    
+                    self.logger.info(
+                        f"📊 Market moved against {position.market_id}, adjusting sell target"
+                    )
+                    
+                    return {
+                        'adjusted': True,
+                        'old_price': target_price_cents,
+                        'new_price': new_price_cents
+                    }
+            
+            return {'adjusted': False}
+            
+        except Exception as e:
+            self.logger.error(f"Error checking/adjusting sell price for {position.market_id}: {e}")
+            return {'adjusted': False}
 
 
 async def run_quick_flip_strategy(

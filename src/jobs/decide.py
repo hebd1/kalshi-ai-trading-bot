@@ -14,6 +14,7 @@ from src.utils.logging_setup import get_trading_logger
 from src.clients.xai_client import XAIClient
 from src.clients.kalshi_client import KalshiClient
 from src.utils.ai_accuracy_tracker import create_accuracy_tracker
+from src.utils.price_utils import get_entry_price
 
 # Initialize AI accuracy tracker for logging predictions
 _accuracy_tracker = None
@@ -151,6 +152,17 @@ async def make_decision_for_market(
             
             # Check for high-odds YES bet
             if market.yes_price >= settings.trading.high_confidence_market_odds:
+                # Fetch actual market data to get ASK price for accurate entry pricing
+                high_conf_market_response = await kalshi_client.get_market(market.market_id)
+                high_conf_market_data = high_conf_market_response.get("market", {})
+                
+                # Get proper ASK price for entry (not midpoint)
+                entry_price, entry_price_valid = get_entry_price(high_conf_market_data, "YES")
+                
+                if not entry_price_valid or entry_price <= 0:
+                    logger.warning(f"Invalid entry price for high-confidence {market.market_id}: ${entry_price:.3f}, skipping")
+                    return None
+                
                 # Skip expensive news search for high-confidence strategy to control costs
                 news_summary = f"Near-expiry high-confidence analysis. Market at {market.yes_price:.2f}"
                 
@@ -175,15 +187,16 @@ async def make_decision_for_market(
                         market.market_id, decision_action, confidence, total_analysis_cost, "high_confidence"
                     )
                     
-                    confidence_delta = decision.confidence - market.yes_price
-                    quantity = _calculate_dynamic_quantity(available_balance, market.yes_price, confidence_delta)
+                    # Use proper ASK price for position sizing and entry
+                    confidence_delta = decision.confidence - entry_price
+                    quantity = _calculate_dynamic_quantity(available_balance, entry_price, confidence_delta)
 
                     if quantity > 0:
                         # Calculate exit strategy using Grok4 recommendations  
                         from src.utils.stop_loss_calculator import StopLossCalculator
                         
                         exit_strategy = StopLossCalculator.calculate_stop_loss_levels(
-                            entry_price=market.yes_price,
+                            entry_price=entry_price,  # Use ASK price, not midpoint
                             side=decision.side,
                             confidence=confidence,
                             market_volatility=estimate_market_volatility(market),
@@ -198,8 +211,8 @@ async def make_decision_for_market(
                                 predicted_probability=decision.confidence,
                                 confidence=decision.confidence,
                                 predicted_side=decision.side,
-                                market_price=market.yes_price,
-                                edge_magnitude=abs(decision.confidence - market.yes_price),
+                                market_price=entry_price,  # Use actual ASK price
+                                edge_magnitude=abs(decision.confidence - entry_price),
                                 strategy="high_confidence",
                                 volume=market.volume,
                                 time_to_expiry_hours=hours_to_expiry
@@ -211,7 +224,7 @@ async def make_decision_for_market(
                         position = Position(
                             market_id=market.market_id,
                             side=decision.side,
-                            entry_price=market.yes_price,
+                            entry_price=entry_price,  # Use ASK price, not midpoint
                             quantity=quantity,
                             timestamp=datetime.now(),
                             rationale="High-confidence near-expiry YES bet.",
@@ -314,7 +327,13 @@ async def make_decision_for_market(
         )
 
         if decision.action == "BUY" and decision.confidence >= settings.trading.min_confidence_to_trade:
-            price = market.yes_price if decision.side == "YES" else market.no_price
+            # CRITICAL: Use ASK price from API (what sellers want), not midpoint from Market dataclass
+            # get_entry_price returns the proper price for entering a position
+            price, price_valid = get_entry_price(full_market_data, decision.side)
+            
+            if not price_valid or price <= 0:
+                logger.warning(f"Invalid entry price for {market.market_id} {decision.side}: ${price:.3f}, skipping")
+                return None
             
             # --- Spread-Aware Filtering ---
             # Reject markets with wide spreads (> 5 cents) immediately to prevent entering bad trades.

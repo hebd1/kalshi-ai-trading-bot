@@ -17,6 +17,7 @@ from src.utils.database import DatabaseManager, Position, TradeLog
 from src.config.settings import settings
 from src.utils.logging_setup import setup_logging, get_trading_logger, log_trade_execution
 from src.clients.kalshi_client import KalshiClient
+from src.utils.price_utils import get_market_prices, get_entry_price
 
 # Last sync timestamp for periodic syncing
 _last_db_sync = None
@@ -70,14 +71,23 @@ async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: 
                         market_data = await kalshi_client.get_market(ticker)
                         market_info = market_data.get('market', {})
                         
-                        # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
-                        # Fallback chain: bid -> ask -> last_price
-                        if side == 'YES':
-                            price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
-                                    or market_info.get('last_price', 50)) / 100
-                        else:
-                            price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
-                                    or (100 - market_info.get('last_price', 50))) / 100
+                        # Use validated price extraction from price_utils
+                        price, price_valid = get_entry_price(market_info, side)
+                        
+                        # CRITICAL: Skip sync if price is invalid
+                        if not price_valid:
+                            logger.warning(f"Skipping sync for {ticker} {side}: no valid price available")
+                            results['errors'] += 1
+                            continue
+                        
+                        # CRITICAL: Skip sync if price is at extreme values (indicates resolved/illiquid market)
+                        if price <= 0.02 or price >= 0.98:
+                            logger.warning(
+                                f"Skipping sync for {ticker} {side}: extreme price ${price:.2f} "
+                                f"(likely resolved or illiquid market)"
+                            )
+                            results['errors'] += 1
+                            continue
                         
                         new_position = Position(
                             market_id=ticker,
@@ -89,7 +99,8 @@ async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: 
                             confidence=0.5,
                             live=True,
                             status='open',
-                            strategy='sync_recovery'
+                            strategy='sync_recovery',
+                            tracked=False  # Don't track P&L for synced positions (unknown entry price)
                         )
                         
                         await db_manager.add_position(new_position)
@@ -192,7 +203,12 @@ async def should_exit_position(
             return True, "time_based", current_price
     
     # 5. Emergency exit for positions without stop-loss (legacy positions)
-    if not position.stop_loss_price:
+    # IMPORTANT: Skip emergency stop-loss for synced positions (sync_recovery, startup_sync, legacy_untracked)
+    # These are positions we synced from Kalshi but didn't create - we don't want to auto-close them
+    synced_strategies = ['sync_recovery', 'startup_sync', 'legacy_untracked']
+    is_synced_position = position.strategy in synced_strategies
+    
+    if not position.stop_loss_price and not is_synced_position:
         # Calculate emergency stop-loss at 10% loss
         from src.utils.stop_loss_calculator import StopLossCalculator
         emergency_stop = StopLossCalculator.calculate_simple_stop_loss(

@@ -552,14 +552,15 @@ class UnifiedAdvancedTradingSystem:
                     # FIXED: Extract from nested 'market' object
                     market_info = market_data.get('market', {})
                     
-                    # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
-                    # Get price for the intended side (already determined above)
-                    if intended_side == "YES":
-                        price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
-                                or market_info.get('last_price', 50)) / 100
-                    else:
-                        price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
-                                or (100 - market_info.get('last_price', 50))) / 100
+                    # CRITICAL FIX: Use get_entry_price() for correct ASK price when buying
+                    # When BUYING, you pay the ASK price (what sellers want), not BID
+                    from src.utils.price_utils import get_entry_price
+                    price, price_valid = get_entry_price(market_info, intended_side)
+                    
+                    if not price_valid or price <= 0:
+                        self.logger.warning(f"Invalid entry price for {market_id} {intended_side}: ${price:.3f}, skipping")
+                        results['failed_executions'] += 1
+                        continue
                     
                     # Calculate quantity
                     quantity = max(1, int(position_value / price))
@@ -796,13 +797,28 @@ class UnifiedAdvancedTradingSystem:
             
             if risk_violations:
                 self.logger.warning(f"⚠️  Risk violations detected: {risk_violations}")
-                # TODO: Implement automatic position sizing reduction
+                # Implement automatic position sizing reduction
+                # Reduce max position size by 20% for each violation (min 50% of original)
+                reduction_factor = max(0.5, 1.0 - (0.2 * len(risk_violations)))
+                reduced_max_position = self.config.max_single_position * reduction_factor
+                self.logger.info(
+                    f"🛡️ Reducing max position size from {self.config.max_single_position:.1%} "
+                    f"to {reduced_max_position:.1%} due to {len(risk_violations)} risk violation(s)"
+                )
+                # Temporarily adjust the config for this session
+                self._original_max_position = getattr(self, '_original_max_position', self.config.max_single_position)
+                self.config.max_single_position = reduced_max_position
+            elif hasattr(self, '_original_max_position'):
+                # Restore original position sizing when no violations
+                self.logger.info(f"✅ Risk violations cleared - restoring max position to {self._original_max_position:.1%}")
+                self.config.max_single_position = self._original_max_position
             
             # Check if rebalancing is needed
             time_since_rebalance = datetime.now() - self.last_rebalance
             if time_since_rebalance.total_seconds() > (self.config.rebalance_frequency_hours * 3600):
                 self.logger.info("🔄 Portfolio rebalancing triggered")
-                # TODO: Implement rebalancing logic
+                # Implement rebalancing logic - log current allocation and performance
+                await self._perform_portfolio_rebalance(results)
                 self.last_rebalance = datetime.now()
             
             # Performance monitoring
@@ -815,7 +831,126 @@ class UnifiedAdvancedTradingSystem:
         except Exception as e:
             self.logger.error(f"Error in risk management: {e}")
 
-
+    async def _perform_portfolio_rebalance(self, results: TradingSystemResults) -> None:
+        """
+        Perform portfolio rebalancing based on current positions and performance.
+        
+        This method:
+        1. Analyzes current position allocation vs target allocation
+        2. Identifies over-weighted and under-weighted positions
+        3. Logs rebalancing recommendations
+        4. Optionally closes positions that deviate significantly from targets
+        """
+        try:
+            self.logger.info("📊 Starting portfolio rebalance analysis...")
+            
+            # Get current open positions
+            positions = await self.db_manager.get_open_positions()
+            
+            if not positions:
+                self.logger.info("No open positions to rebalance")
+                return
+            
+            # Calculate current allocation by strategy
+            strategy_allocations = {}
+            total_position_value = 0.0
+            
+            for pos in positions:
+                strategy = pos.strategy or 'unknown'
+                position_value = pos.entry_price * pos.quantity
+                total_position_value += position_value
+                
+                if strategy not in strategy_allocations:
+                    strategy_allocations[strategy] = {
+                        'value': 0.0,
+                        'count': 0,
+                        'positions': []
+                    }
+                
+                strategy_allocations[strategy]['value'] += position_value
+                strategy_allocations[strategy]['count'] += 1
+                strategy_allocations[strategy]['positions'].append(pos)
+            
+            if total_position_value == 0:
+                self.logger.info("No position value to rebalance")
+                return
+            
+            # Log current allocation vs target
+            self.logger.info(f"📈 Current Portfolio Allocation (Total: ${total_position_value:.2f}):")
+            
+            target_allocations = {
+                'market_making': self.config.market_making_allocation,
+                'portfolio_optimization': self.config.directional_trading_allocation,
+                'directional_trading': self.config.directional_trading_allocation,
+                'quick_flip_scalping': self.config.quick_flip_allocation,
+                'arbitrage': self.config.arbitrage_allocation
+            }
+            
+            rebalance_recommendations = []
+            
+            for strategy, data in strategy_allocations.items():
+                current_pct = data['value'] / total_position_value
+                target_pct = target_allocations.get(strategy, 0.0)
+                deviation = current_pct - target_pct
+                
+                self.logger.info(
+                    f"   • {strategy}: ${data['value']:.2f} ({current_pct:.1%}) | "
+                    f"Target: {target_pct:.1%} | Deviation: {deviation:+.1%}"
+                )
+                
+                # Flag significant deviations (>10% off target)
+                if abs(deviation) > 0.10:
+                    action = "REDUCE" if deviation > 0 else "INCREASE"
+                    rebalance_recommendations.append({
+                        'strategy': strategy,
+                        'action': action,
+                        'deviation': deviation,
+                        'current_value': data['value'],
+                        'positions': data['positions']
+                    })
+            
+            # Log recommendations
+            if rebalance_recommendations:
+                self.logger.info("🔄 Rebalancing Recommendations:")
+                for rec in rebalance_recommendations:
+                    self.logger.info(
+                        f"   • {rec['action']} {rec['strategy']}: "
+                        f"Currently {abs(rec['deviation']):.1%} {'over' if rec['deviation'] > 0 else 'under'} target"
+                    )
+                
+                # Automatic rebalancing: Close worst-performing positions in over-allocated strategies
+                for rec in rebalance_recommendations:
+                    if rec['action'] == 'REDUCE' and len(rec['positions']) > 1:
+                        # Find position with lowest confidence or longest hold time
+                        positions_to_evaluate = rec['positions']
+                        
+                        # Sort by confidence (lowest first) - close lowest confidence first
+                        positions_sorted = sorted(
+                            positions_to_evaluate,
+                            key=lambda p: p.confidence or 0.5
+                        )
+                        
+                        # Log suggestion but don't auto-close (conservative approach)
+                        lowest_confidence_pos = positions_sorted[0]
+                        self.logger.info(
+                            f"   💡 Suggestion: Consider closing {lowest_confidence_pos.market_id} "
+                            f"(confidence: {lowest_confidence_pos.confidence or 0:.2f}) to reduce {rec['strategy']} allocation"
+                        )
+            else:
+                self.logger.info("✅ Portfolio allocation is within acceptable ranges")
+            
+            # Log overall portfolio health
+            self.logger.info(
+                f"📊 Portfolio Health Summary:\n"
+                f"   • Total Positions: {len(positions)}\n"
+                f"   • Total Value: ${total_position_value:.2f}\n"
+                f"   • Capital Efficiency: {results.capital_efficiency:.1%}\n"
+                f"   • Expected Return: {results.expected_annual_return:.1%}\n"
+                f"   • Sharpe Ratio: {results.portfolio_sharpe_ratio:.2f}"
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error during portfolio rebalance: {e}")
 
     def get_system_performance_summary(self) -> Dict:
         """

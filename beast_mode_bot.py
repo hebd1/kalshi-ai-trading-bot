@@ -32,6 +32,7 @@ from src.jobs.track import run_tracking
 from src.jobs.evaluate import run_evaluation
 from src.utils.logging_setup import setup_logging, get_trading_logger
 from src.utils.database import DatabaseManager, Position
+from src.utils.price_utils import get_entry_price
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
 from src.config.settings import settings
@@ -252,16 +253,27 @@ class BeastModeBot:
                                 if market_data and 'market' in market_data:
                                     market_info = market_data['market']
                                     
-                                    # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
-                                    # Fallback chain: bid -> ask -> last_price
+                                    # Determine side based on position direction
                                     if position_count > 0:  # YES position
                                         side = 'YES'
-                                        current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
-                                                        or market_info.get('last_price', 50)) / 100
                                     else:  # NO position
                                         side = 'NO'
-                                        current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
-                                                        or (100 - market_info.get('last_price', 50))) / 100
+                                    
+                                    # Use validated price extraction from price_utils
+                                    current_price, price_valid = get_entry_price(market_info, side)
+                                    
+                                    # CRITICAL: Skip sync if price is invalid
+                                    if not price_valid:
+                                        self.logger.warning(f"Skipping untracked sync for {ticker} {side}: no valid price available")
+                                        continue
+                                    
+                                    # CRITICAL: Skip sync if price is at extreme values (indicates resolved/illiquid market)
+                                    if current_price <= 0.02 or current_price >= 0.98:
+                                        self.logger.warning(
+                                            f"Skipping untracked sync for {ticker} {side}: extreme price ${current_price:.2f} "
+                                            f"(likely resolved or illiquid market)"
+                                        )
+                                        continue
                                     
                                     # Create untracked position
                                     untracked_position = Position(
@@ -348,17 +360,27 @@ class BeastModeBot:
                         if market_data and 'market' in market_data:
                             market_info = market_data['market']
                             
-                            # CRITICAL FIX: Kalshi API uses yes_bid/no_bid, NOT yes_price/no_price
-                            # Fallback chain: bid -> ask -> last_price
-                            # Determine side and current price
+                            # Determine side based on position direction
                             if position_count > 0:  # YES position
                                 side = 'YES'
-                                current_price = (market_info.get('yes_bid', 0) or market_info.get('yes_ask', 0) 
-                                                or market_info.get('last_price', 50)) / 100
                             else:  # NO position
                                 side = 'NO'
-                                current_price = (market_info.get('no_bid', 0) or market_info.get('no_ask', 0) 
-                                                or (100 - market_info.get('last_price', 50))) / 100
+                            
+                            # Use validated price extraction from price_utils
+                            current_price, price_valid = get_entry_price(market_info, side)
+                            
+                            # CRITICAL: Skip sync if price is invalid
+                            if not price_valid:
+                                self.logger.warning(f"Skipping sync for {ticker} {side}: no valid price available")
+                                continue
+                            
+                            # CRITICAL: Skip sync if price is at extreme values (indicates resolved/illiquid market)
+                            if current_price <= 0.02 or current_price >= 0.98:
+                                self.logger.warning(
+                                    f"Skipping sync for {ticker} {side}: extreme price ${current_price:.2f} "
+                                    f"(likely resolved or illiquid market)"
+                                )
+                                continue
                             
                             # Check if position already exists in DB (including closed positions!)
                             # First check for open position
@@ -404,7 +426,8 @@ class BeastModeBot:
                                             confidence=0.5,
                                             live=True,
                                             status='open',
-                                            strategy='startup_sync'
+                                            strategy='startup_sync',
+                                            tracked=False  # Don't track P&L for synced positions
                                         )
                                         
                                         # Add to database directly (bypass the duplicate check since we just did it)
@@ -419,14 +442,15 @@ class BeastModeBot:
                                             'live': True,
                                             'status': 'open',
                                             'strategy': 'startup_sync',
+                                            'tracked': False,  # Don't track P&L for synced positions
                                             'stop_loss_price': None,
                                             'take_profit_price': None,
                                             'max_hold_hours': None,
                                             'target_confidence_change': None
                                         }
                                         await db.execute("""
-                                            INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
-                                            VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
+                                            INSERT INTO positions (market_id, side, entry_price, quantity, timestamp, rationale, confidence, live, status, strategy, tracked, stop_loss_price, take_profit_price, max_hold_hours, target_confidence_change)
+                                            VALUES (:market_id, :side, :entry_price, :quantity, :timestamp, :rationale, :confidence, :live, :status, :strategy, :tracked, :stop_loss_price, :take_profit_price, :max_hold_hours, :target_confidence_change)
                                         """, position_dict)
                                         await db.commit()
                                         synced_count += 1
