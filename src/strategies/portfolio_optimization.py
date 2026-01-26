@@ -1229,7 +1229,38 @@ async def _get_fast_ai_prediction(
     """
     Get a fast AI prediction for a market without expensive analysis.
     Returns (predicted_probability, confidence) or (None, None) if failed.
+    
+    When AI is disabled via settings.trading.use_ai_for_decisions, 
+    uses internal heuristics instead of XAI API calls.
     """
+    from src.config.settings import settings
+    
+    # =====================================================================
+    # AI BYPASS: Use internal logic when AI is disabled to save API costs
+    # =====================================================================
+    if not settings.trading.use_ai_for_decisions:
+        from src.utils.internal_decision_logic import get_internal_probability_estimate
+        import time
+        
+        # Calculate hours to expiry
+        hours_to_expiry = (market.expiration_ts - time.time()) / 3600 if market.expiration_ts else 168
+        
+        # Get internal probability estimate
+        probability, confidence = get_internal_probability_estimate(
+            market_price=market_price,
+            volume=market.volume,
+            hours_to_expiry=hours_to_expiry
+        )
+        
+        logging.getLogger("portfolio_opportunities").info(
+            f"🔧 INTERNAL PREDICTION for {market.market_id}: prob={probability:.3f}, conf={confidence:.3f}"
+        )
+        
+        return probability, confidence
+    # =====================================================================
+    # END AI BYPASS - Continue with normal AI-based prediction below
+    # =====================================================================
+    
     try:
         # Create a simplified prompt for faster analysis
         prompt = f"""

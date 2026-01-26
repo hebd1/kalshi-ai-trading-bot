@@ -15,6 +15,10 @@ from src.clients.xai_client import XAIClient
 from src.clients.kalshi_client import KalshiClient
 from src.utils.ai_accuracy_tracker import create_accuracy_tracker
 from src.utils.price_utils import get_entry_price
+from src.utils.internal_decision_logic import (
+    make_internal_trading_decision,
+    should_skip_market_without_ai
+)
 
 # Initialize AI accuracy tracker for logging predictions
 _accuracy_tracker = None
@@ -136,6 +140,122 @@ async def make_decision_for_market(
         portfolio_data = {"available_balance": available_balance}
         
         logger.info(f"Current available balance: ${available_balance:.2f}")
+
+        # =====================================================================
+        # AI BYPASS: Use internal logic when AI is disabled to save API costs
+        # =====================================================================
+        if not settings.trading.use_ai_for_decisions:
+            logger.info(f"🔧 AI DISABLED: Using internal logic for {market.market_id}")
+            
+            # Calculate hours to expiry for filtering
+            hours_to_expiry = (market.expiration_ts - time.time()) / 3600
+            
+            # Check if we should skip this market using internal filters
+            if should_skip_market_without_ai(
+                yes_price=market.yes_price,
+                no_price=market.no_price,
+                volume=market.volume,
+                hours_to_expiry=hours_to_expiry
+            ):
+                logger.info(f"⏭️ INTERNAL FILTER SKIP: {market.market_id} - market conditions not favorable")
+                return None
+            
+            # Fetch full market data for proper entry pricing
+            full_market_data_response = await kalshi_client.get_market(market.market_id)
+            full_market_data = full_market_data_response.get("market", {})
+            
+            # Prepare market data dict for internal logic
+            market_data = {
+                "ticker": market.market_id,
+                "title": market.title,
+                "yes_price": market.yes_price,
+                "no_price": market.no_price,
+                "volume": market.volume,
+                "expiration_ts": market.expiration_ts,
+            }
+            
+            # Get internal trading decision
+            internal_decision = make_internal_trading_decision(market_data, portfolio_data)
+            
+            if internal_decision.action == "SKIP":
+                logger.info(f"⏭️ INTERNAL DECISION SKIP: {market.market_id} - {internal_decision.reasoning}")
+                return None
+            
+            # Process BUY decision
+            if internal_decision.action == "BUY":
+                # Get proper ASK price for entry
+                price, price_valid = get_entry_price(full_market_data, internal_decision.side)
+                
+                if not price_valid or price <= 0:
+                    logger.warning(f"Invalid entry price for {market.market_id} {internal_decision.side}: ${price:.3f}, skipping")
+                    return None
+                
+                # Apply spread filter
+                implied_spread_cost = (market.yes_price + market.no_price) - 1.0
+                MAX_SPREAD_TOLERANCE = 0.05
+                
+                if implied_spread_cost > MAX_SPREAD_TOLERANCE:
+                    logger.info(f"❌ SPREAD FILTER: {market.market_id} - Spread {implied_spread_cost:.2f} too wide")
+                    return None
+                
+                # Calculate position size
+                confidence_delta = internal_decision.confidence - price
+                quantity = _calculate_dynamic_quantity(available_balance, price, confidence_delta)
+                
+                if quantity <= 0:
+                    logger.info(f"❌ QUANTITY TOO SMALL: {market.market_id}")
+                    return None
+                
+                # Check position limits
+                from src.utils.position_limits import check_can_add_position
+                from src.utils.cash_reserves import check_can_trade_with_cash_reserves
+                
+                trade_value = quantity * price
+                can_add, limit_reason = await check_can_add_position(trade_value, db_manager, kalshi_client)
+                if not can_add:
+                    logger.info(f"❌ POSITION LIMITS: {market.market_id} - {limit_reason}")
+                    return None
+                
+                can_trade_cash, cash_reason = await check_can_trade_with_cash_reserves(trade_value, db_manager, kalshi_client)
+                if not can_trade_cash:
+                    logger.info(f"❌ CASH RESERVES: {market.market_id} - {cash_reason}")
+                    return None
+                
+                # Calculate exit strategy
+                from src.utils.stop_loss_calculator import StopLossCalculator
+                exit_strategy = StopLossCalculator.calculate_stop_loss_levels(
+                    entry_price=price,
+                    side=internal_decision.side,
+                    confidence=internal_decision.confidence,
+                    market_volatility=estimate_market_volatility(market),
+                    time_to_expiry_days=get_time_to_expiry_days(market)
+                )
+                
+                logger.info(
+                    f"✅ INTERNAL BUY DECISION: {market.market_id} {internal_decision.side} "
+                    f"@ ${price:.3f} x {quantity} (conf: {internal_decision.confidence:.2f}) - {internal_decision.reasoning}"
+                )
+                
+                return Position(
+                    market_id=market.market_id,
+                    side=internal_decision.side,
+                    entry_price=price,
+                    quantity=quantity,
+                    timestamp=datetime.now(),
+                    rationale=f"[INTERNAL] {internal_decision.reasoning}",
+                    confidence=internal_decision.confidence,
+                    live=False,
+                    strategy="directional_trading",
+                    stop_loss_price=exit_strategy['stop_loss_price'],
+                    take_profit_price=exit_strategy['take_profit_price'],
+                    max_hold_hours=exit_strategy['max_hold_hours'],
+                    target_confidence_change=exit_strategy['target_confidence_change']
+                )
+            
+            return None
+        # =====================================================================
+        # END AI BYPASS - Continue with normal AI-based decision making below
+        # =====================================================================
 
         # Initialize tracking variables
         total_analysis_cost = 0.0

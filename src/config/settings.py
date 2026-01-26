@@ -73,6 +73,12 @@ class APIConfig:
 @dataclass
 class TradingConfig:
     """Trading strategy configuration."""
+    
+    # === AI MODE TOGGLE ===
+    # Set to False to disable XAI/Grok API calls and use internal rule-based logic
+    # This saves API costs while still allowing trading based on market heuristics
+    use_ai_for_decisions: bool = False  # TEMPORARILY DISABLED to save API costs
+    
     # Position sizing and risk management - MADE MORE AGGRESSIVE  
     max_position_size_pct: float = 5.0  # INCREASED: Back to 5% per position (was 3%)
     max_daily_loss_pct: float = 15.0    # INCREASED: Allow 15% daily loss (was 10%) 
