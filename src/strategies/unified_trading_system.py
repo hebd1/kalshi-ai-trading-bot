@@ -473,7 +473,7 @@ class UnifiedAdvancedTradingSystem:
                     existing_position = await self.db_manager.get_position_by_market_and_side(market_id, intended_side)
                     
                     if existing_position:
-                        self.logger.info(f"⏭️ SKIPPING {market_id} {intended_side} - exact position already exists (likely from immediate trade)")
+                        self.logger.debug(f"⏭️ SKIPPING {market_id} {intended_side} - exact position already exists (likely from immediate trade)")
                         results['positions_created'] += 1  # Count as created since it exists
                         results['total_capital_used'] += allocation_fraction * self.directional_capital
                         continue
@@ -518,11 +518,11 @@ class UnifiedAdvancedTradingSystem:
                             current_positions = await limits_manager._get_position_count()
                             
                             if current_positions >= limits_manager.max_positions:
-                                self.logger.info(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
+                                self.logger.debug(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
                                 results['failed_executions'] += 1
                                 continue
                             else:
-                                self.logger.info(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_value * 0.1:.2f} exceeds limits")
+                                self.logger.debug(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_value * 0.1:.2f} exceeds limits")
                                 results['failed_executions'] += 1
                                 continue
                     
@@ -537,7 +537,7 @@ class UnifiedAdvancedTradingSystem:
                     )
                     
                     if not can_trade_reserves:
-                        self.logger.info(f"❌ CASH RESERVES BLOCK ALLOCATION: {market_id} - {reserves_reason}")
+                        self.logger.debug(f"❌ CASH RESERVES BLOCK ALLOCATION: {market_id} - {reserves_reason}")
                         results['failed_executions'] += 1
                         continue
                     
@@ -663,8 +663,8 @@ class UnifiedAdvancedTradingSystem:
             total_trades = 0
             total_exposure = 0.0
             
-            # Limit number of arbitrage executions per cycle to manage complexity for now
-            max_executions = 3 
+            # Limit number of arbitrage executions per cycle (configurable in settings)
+            max_executions = settings.trading.arbitrage_max_executions
             
             live_mode = getattr(settings.trading, 'live_trading_enabled', False)
             

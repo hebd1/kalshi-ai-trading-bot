@@ -258,7 +258,7 @@ class AdvancedMarketMaker:
                         opportunities.append(opportunity)
                         self.logger.info(f"✅ MARKET MAKING APPROVED: {market.market_id} - YES edge: {yes_edge_result.edge_percentage:.1%}, NO edge: {no_edge_result.edge_percentage:.1%}")
                 else:
-                    self.logger.info(f"❌ MARKET MAKING FILTERED: {market.market_id} - Insufficient edge on both sides")
+                    self.logger.debug(f"❌ MARKET MAKING FILTERED: {market.market_id} - Insufficient edge on both sides")
                     
             except Exception as e:
                 from src.clients.kalshi_client import MarketNotFoundError

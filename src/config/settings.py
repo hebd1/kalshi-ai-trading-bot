@@ -129,14 +129,14 @@ class TradingConfig:
     max_analysis_cost_per_decision: float = 0.15  # INCREASED: Allow higher cost per decision (was 0.10, now 0.15)
     min_confidence_threshold: float = 0.45  # DECREASED: Lower confidence threshold (was 0.55, now 0.45)
 
-    # Cost control and market analysis frequency - BALANCED
-    daily_ai_budget: float = 1.0  # INCREASED: Higher daily budget (was 5.0, now 10.0)
-    max_ai_cost_per_decision: float = 0.08  # INCREASED: Higher per-decision cost (was 0.05, now 0.08)
-    analysis_cooldown_hours: int = 4  # INCREASED: Better cooldown (increased from 3 to 4 hours)
-    max_analyses_per_market_per_day: int = 4  # BALANCED: Moderate analyses per day (was 2, increased to 4, kept at 4)
+    # Cost control and market analysis frequency
+    # NOTE: daily_ai_budget is the SINGLE SOURCE OF TRUTH for AI spending limits
+    daily_ai_budget: float = 1.0  # Daily AI API spending limit in USD (current: $1.00)
+    max_ai_cost_per_decision: float = 0.08  # Maximum cost per trading decision
+    analysis_cooldown_hours: int = 4  # Hours between re-analyzing same market
+    max_analyses_per_market_per_day: int = 4  # Maximum AI analyses per market per day
     
-    # Daily AI spending limits - SAFETY CONTROLS
-    daily_ai_cost_limit: float = 1.0  # Maximum daily spending on AI API calls (USD)
+    # Daily AI spending behavior controls
     enable_daily_cost_limiting: bool = True  # Enable daily cost limits
     sleep_when_limit_reached: bool = True  # Sleep until next day when limit reached
 
@@ -145,6 +145,21 @@ class TradingConfig:
     exclude_low_liquidity_categories: List[str] = field(default_factory=lambda: [
         # REMOVED weather and entertainment - trade all categories
     ])
+
+    # === ARBITRAGE STRATEGY SETTINGS ===
+    # Configuration for the arbitrage scanner and execution
+    arbitrage_qty_cap: int = 10  # Maximum contracts per arbitrage leg (safety limit)
+    arbitrage_max_executions: int = 3  # Maximum arbitrage opportunities to execute per cycle
+
+    # === CASH RESERVE SETTINGS ===
+    # Controls how much cash to keep in reserve for safety/opportunities
+    # NOTE: These are intentionally set low for aggressive capital deployment
+    cash_minimum_reserve_pct: float = 0.5      # Minimum cash reserve as % of portfolio (0.5%)
+    cash_optimal_reserve_pct: float = 1.0      # Target optimal reserve % (1%)
+    cash_emergency_threshold_pct: float = 0.2  # Emergency halt threshold % (0.2%)
+    cash_critical_threshold_pct: float = 0.05  # Critical threshold % (0.05%)
+    cash_max_single_trade_impact: float = 5.0  # Max % portfolio impact per trade (5%)
+    cash_buffer_for_opportunities: float = 0.5 # Buffer for opportunistic trades % (0.5%)
 
 
 @dataclass
@@ -216,12 +231,10 @@ min_price_movement: float = 0.02        # DECREASED: Lower minimum range (was 0.
 max_bid_ask_spread: float = 0.15        # INCREASED: Allow wider spreads (was 0.10, now 15¢)
 min_confidence_long_term: float = 0.45  # DECREASED: Lower confidence for distant expiries (was 0.65, now 45%)
 
-# === COST OPTIMIZATION (MORE GENEROUS) ===
-# Enhanced cost controls for the beast mode system
-daily_ai_budget: float = 1.0           # INCREASED: Higher budget for more opportunities (was 10.0, now 15.0)
-max_ai_cost_per_decision: float = 0.12  # INCREASED: Higher per-decision limit (was 0.08, now 0.12)
-analysis_cooldown_hours: int = 2        # DECREASED: Much shorter cooldown (was 4, now 2)
-max_analyses_per_market_per_day: int = 6  # INCREASED: More analyses per day (was 3, now 6)
+# === COST OPTIMIZATION ===
+# NOTE: These are legacy module-level variables - prefer settings.trading.* instead
+# The authoritative daily_ai_budget is in TradingConfig above
+# These remain for backward compatibility with older code paths
 skip_news_for_low_volume: bool = True   # Skip expensive searches for low volume
 news_search_volume_threshold: float = 1000.0  # News threshold
 
@@ -231,7 +244,7 @@ beast_mode_enabled: bool = True         # Enable the unified advanced system
 fallback_to_legacy: bool = True         # Fallback to legacy system if needed
 live_trading_enabled: bool = True       # Set to True for live trading
 paper_trading_mode: bool = False        # Paper trading for testing
-log_level: str = "INFO"                 # Logging level
+# NOTE: log_level moved to LoggingConfig dataclass - use settings.logging.log_level
 performance_monitoring: bool = True     # Enable performance monitoring
 
 # === ADVANCED FEATURES ===

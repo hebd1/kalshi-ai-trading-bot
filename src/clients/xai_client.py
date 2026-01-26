@@ -114,8 +114,8 @@ class XAIClient(TradingLoggerMixin):
         except Exception as e:
             self.logger.warning(f"Failed to load daily tracker: {e}")
         
-        # Create new tracker
-        daily_limit = getattr(settings.trading, 'daily_ai_cost_limit', 50.0)
+        # Create new tracker - use daily_ai_budget as the single source of truth
+        daily_limit = getattr(settings.trading, 'daily_ai_budget', 1.0)
         return DailyUsageTracker(date=today, daily_limit=daily_limit)
 
     def _save_daily_tracker(self):

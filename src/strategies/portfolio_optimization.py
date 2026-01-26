@@ -912,7 +912,7 @@ async def create_market_opportunities_from_markets(
                 if db_manager:
                     await _evaluate_immediate_trade(opportunity, db_manager, kalshi_client, total_capital)
             else:
-                logger.info(f"❌ EDGE FILTERED: {market.market_id} - {edge_result.reason}")
+                logger.debug(f"❌ EDGE FILTERED: {market.market_id} - {edge_result.reason}")
             
         except Exception as e:
             from src.clients.kalshi_client import MarketNotFoundError
@@ -1057,10 +1057,10 @@ async def _evaluate_immediate_trade(
                 current_positions = await limits_manager._get_position_count()
                 
                 if current_positions >= limits_manager.max_positions:
-                    logger.info(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
+                    logger.debug(f"❌ POSITION COUNT LIMIT: {current_positions}/{limits_manager.max_positions} positions - cannot add new position")
                     return
                 else:
-                    logger.info(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_size * 0.1:.2f} exceeds limits")
+                    logger.debug(f"❌ POSITION SIZE LIMIT: Even minimum size ${initial_position_size * 0.1:.2f} exceeds limits")
                     return
         
         logger.info(f"✅ POSITION LIMITS OK FOR IMMEDIATE TRADE: ${initial_position_size:.2f}")
@@ -1076,7 +1076,7 @@ async def _evaluate_immediate_trade(
             position_count = result[0] if result else 0
         
         if position_count > 0:
-            logger.info(f"⏭️ Skipping immediate trade for {opportunity.market_id} - position already exists")
+            logger.debug(f"⏭️ Skipping immediate trade for {opportunity.market_id} - position already exists")
             return
         
         # 🚀 STRONG OPPORTUNITY - TRADE IMMEDIATELY!
@@ -1095,7 +1095,7 @@ async def _evaluate_immediate_trade(
         )
         
         if not can_trade_reserves:
-            logger.info(f"❌ CASH RESERVES CHECK FAILED: {opportunity.market_id} - {reserves_reason}")
+            logger.debug(f"❌ CASH RESERVES CHECK FAILED: {opportunity.market_id} - {reserves_reason}")
             return
         
         logger.info(f"✅ CASH RESERVES APPROVED: ${position_size:.2f} - {reserves_reason}")

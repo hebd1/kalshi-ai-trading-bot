@@ -71,15 +71,21 @@ def cleanup_old_logs(logs_dir: Path, max_files: int = MAX_LOG_FILES, max_days: i
         pass  # Don't fail if cleanup fails
 
 
-def setup_logging(log_level: str = "INFO") -> None:
+def setup_logging(log_level: str = None) -> None:
     """
     Set up structured logging for the trading system.
     Creates a new log file for each run with timestamp.
     Includes automatic log rotation and cleanup.
     
     Args:
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR). 
+                   Defaults to settings.logging.log_level if not specified.
     """
+    # Import settings here to avoid circular import
+    from src.config.settings import settings
+    
+    if log_level is None:
+        log_level = settings.logging.log_level
     # Create logs directory if it doesn't exist
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)

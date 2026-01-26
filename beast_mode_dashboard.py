@@ -300,7 +300,7 @@ class BeastModeDashboard:
             daily_cost = performance.get('daily_ai_cost', 0)
             cost_analysis = performance.get('cost_analysis', {})
             
-            daily_budget = getattr(settings.trading, 'daily_ai_budget', 10.0)
+            daily_budget = getattr(settings.trading, 'daily_ai_budget', 1.0)
             budget_used_pct = (daily_cost / daily_budget) * 100 if daily_budget > 0 else 0
             
             print(f"💰 Daily AI Spending: ${daily_cost:.2f} / ${daily_budget:.2f} ({budget_used_pct:.1f}%)")

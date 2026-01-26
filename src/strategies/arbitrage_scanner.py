@@ -21,6 +21,7 @@ from src.utils.logging_setup import get_trading_logger
 from src.clients.kalshi_client import KalshiClient
 from src.utils.database import Position, Order, TradeLog
 from src.utils.database import DatabaseManager
+from src.config.settings import settings
 
 @dataclass
 class ArbitrageOpportunity:
@@ -233,7 +234,7 @@ class ArbitrageScanner:
 
         # Calculate quantity based on max capital
         max_units_by_capital = int(max_capital // cost_per_unit)
-        qty = min(max_units_by_capital, 10)  # Start small: max 10 contracts for safety
+        qty = min(max_units_by_capital, settings.trading.arbitrage_qty_cap)  # Configurable safety cap
         
         if qty <= 0:
             self.logger.warning(f"Quantity 0 calculated for arb (Capital: ${max_capital}, Cost: ${cost_per_unit})")

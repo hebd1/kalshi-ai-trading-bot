@@ -65,21 +65,11 @@ async def process_and_queue_markets(
         await db_manager.upsert_markets(markets_to_upsert)
         logger.info(f"Successfully upserted {len(markets_to_upsert)} markets.")
 
-        # Primary filtering criteria - MORE PERMISSIVE FOR MORE OPPORTUNITIES!
-        min_volume: float = settings.trading.min_volume  # Use settings instead of hardcoded value
-        min_volume_for_ai_analysis: float = settings.trading.min_volume_for_ai_analysis  # Use settings  
-        preferred_categories: List[str] = []  # Empty = all categories allowed
-        excluded_categories: List[str] = []  # Empty = no categories excluded
-
-        # Enhanced filtering for better opportunities - MORE PERMISSIVE FOR MORE TRADES
-        min_price_movement: float = 0.01  # DECREASED: Even lower minimum range (was 0.015, now 1¢)
-        max_bid_ask_spread: float = 0.25   # INCREASED: Allow even wider spreads (was 0.20, now 25¢)
-        min_confidence_for_long_term: float = 0.35  # DECREASED: Lower confidence required (was 0.40, now 35%)
-
+        # Filter eligible markets using settings from settings.trading.*
         eligible_markets = [
             m
             for m in markets_to_upsert
-            if m.volume >= min_volume
+            if m.volume >= settings.trading.min_volume
             # REMOVED TIME RESTRICTION - we can now trade markets with ANY deadline!
             # Dynamic exit strategies will handle timing automatically
             and (

@@ -59,15 +59,15 @@ class CashReservesManager:
         self.kalshi_client = kalshi_client
         self.logger = get_trading_logger("cash_reserves")
         
-        # UPDATED: Minimal cash reserve requirements for maximum deployment
-        self.minimum_reserve_pct = 0.5       # DECREASED: Only 0.5% minimum (was 1%)
-        self.optimal_reserve_pct = 1.0       # DECREASED: Only 1% optimal target (was 2%)
-        self.emergency_threshold_pct = 0.2   # DECREASED: 0.2% emergency halt (was 0.5%)
-        self.critical_threshold_pct = 0.05   # DECREASED: 0.05% critical threshold (was 0.1%)
+        # Cash reserve requirements from settings (configurable)
+        self.minimum_reserve_pct = settings.trading.cash_minimum_reserve_pct
+        self.optimal_reserve_pct = settings.trading.cash_optimal_reserve_pct
+        self.emergency_threshold_pct = settings.trading.cash_emergency_threshold_pct
+        self.critical_threshold_pct = settings.trading.cash_critical_threshold_pct
         
-        # Additional safety parameters - MORE AGGRESSIVE
-        self.max_single_trade_impact = 5.0   # INCREASED: Allow 5% portfolio impact per trade (was 3%)
-        self.buffer_for_opportunities = 0.5  # DECREASED: Only 0.5% buffer (was 1%)
+        # Additional safety parameters from settings
+        self.max_single_trade_impact = settings.trading.cash_max_single_trade_impact
+        self.buffer_for_opportunities = settings.trading.cash_buffer_for_opportunities
         
     async def check_cash_reserves(
         self,

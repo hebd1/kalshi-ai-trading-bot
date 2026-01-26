@@ -106,23 +106,23 @@ async def make_decision_for_market(
             market.market_id, 
             settings.trading.analysis_cooldown_hours
         ):
-            logger.info(f"Market {market.market_id} was recently analyzed. Skipping to save costs.")
+            logger.debug(f"Market {market.market_id} was recently analyzed. Skipping to save costs.")
             return None
 
         # CHECK 3: Daily analysis limit per market
         analysis_count_today = await db_manager.get_market_analysis_count_today(market.market_id)
         if analysis_count_today >= settings.trading.max_analyses_per_market_per_day:
-            logger.info(f"Market {market.market_id} already analyzed {analysis_count_today} times today. Skipping.")
+            logger.debug(f"Market {market.market_id} already analyzed {analysis_count_today} times today. Skipping.")
             return None
 
         # CHECK 4: Volume threshold for AI analysis
         if market.volume < settings.trading.min_volume_for_ai_analysis:
-            logger.info(f"Market {market.market_id} volume {market.volume} below AI analysis threshold. Skipping.")
+            logger.debug(f"Market {market.market_id} volume {market.volume} below AI analysis threshold. Skipping.")
             return None
 
         # CHECK 5: Category filtering
         if market.category.lower() in [cat.lower() for cat in settings.trading.exclude_low_liquidity_categories]:
-            logger.info(f"Market {market.market_id} in excluded category '{market.category}'. Skipping.")
+            logger.debug(f"Market {market.market_id} in excluded category '{market.category}'. Skipping.")
             return None
 
         # CHECK 6: Pre-flight duplicate position check (BEFORE AI call)
@@ -157,7 +157,7 @@ async def make_decision_for_market(
                 volume=market.volume,
                 hours_to_expiry=hours_to_expiry
             ):
-                logger.info(f"⏭️ INTERNAL FILTER SKIP: {market.market_id} - market conditions not favorable")
+                logger.debug(f"⏭️ INTERNAL FILTER SKIP: {market.market_id} - market conditions not favorable")
                 return None
             
             # Fetch full market data for proper entry pricing
@@ -178,7 +178,7 @@ async def make_decision_for_market(
             internal_decision = make_internal_trading_decision(market_data, portfolio_data)
             
             if internal_decision.action == "SKIP":
-                logger.info(f"⏭️ INTERNAL DECISION SKIP: {market.market_id} - {internal_decision.reasoning}")
+                logger.debug(f"⏭️ INTERNAL DECISION SKIP: {market.market_id} - {internal_decision.reasoning}")
                 return None
             
             # Process BUY decision
@@ -195,7 +195,7 @@ async def make_decision_for_market(
                 MAX_SPREAD_TOLERANCE = 0.05
                 
                 if implied_spread_cost > MAX_SPREAD_TOLERANCE:
-                    logger.info(f"❌ SPREAD FILTER: {market.market_id} - Spread {implied_spread_cost:.2f} too wide")
+                    logger.debug(f"❌ SPREAD FILTER: {market.market_id} - Spread {implied_spread_cost:.2f} too wide")
                     return None
                 
                 # Calculate position size
@@ -203,7 +203,7 @@ async def make_decision_for_market(
                 quantity = _calculate_dynamic_quantity(available_balance, price, confidence_delta)
                 
                 if quantity <= 0:
-                    logger.info(f"❌ QUANTITY TOO SMALL: {market.market_id}")
+                    logger.debug(f"❌ QUANTITY TOO SMALL: {market.market_id}")
                     return None
                 
                 # Check position limits
@@ -213,12 +213,12 @@ async def make_decision_for_market(
                 trade_value = quantity * price
                 can_add, limit_reason = await check_can_add_position(trade_value, db_manager, kalshi_client)
                 if not can_add:
-                    logger.info(f"❌ POSITION LIMITS: {market.market_id} - {limit_reason}")
+                    logger.debug(f"❌ POSITION LIMITS: {market.market_id} - {limit_reason}")
                     return None
                 
                 can_trade_cash, cash_reason = await check_can_trade_with_cash_reserves(trade_value, db_manager, kalshi_client)
                 if not can_trade_cash:
-                    logger.info(f"❌ CASH RESERVES: {market.market_id} - {cash_reason}")
+                    logger.debug(f"❌ CASH RESERVES: {market.market_id} - {cash_reason}")
                     return None
                 
                 # Calculate exit strategy
@@ -377,7 +377,7 @@ async def make_decision_for_market(
         # COST OPTIMIZATION: Skip expensive news search for low-volume markets
         if (settings.trading.skip_news_for_low_volume and 
             market.volume < settings.trading.news_search_volume_threshold):
-            logger.info(f"Skipping news search for low volume market {market.market_id} (volume: {market.volume})")
+            logger.debug(f"Skipping news search for low volume market {market.market_id} (volume: {market.volume})")
             news_summary = f"Low volume market ({market.volume}). Analysis based on market data only."
             estimated_search_cost = 0.0
         else:
@@ -466,7 +466,7 @@ async def make_decision_for_market(
             MAX_SPREAD_TOLERANCE = 0.05  # 5 cents max spread allowed
             
             if implied_spread_cost > MAX_SPREAD_TOLERANCE:
-                logger.info(f"❌ SPREAD FILTER REJECTED: {market.market_id} - Spread {implied_spread_cost:.2f} > {MAX_SPREAD_TOLERANCE}")
+                logger.debug(f"❌ SPREAD FILTER REJECTED: {market.market_id} - Spread {implied_spread_cost:.2f} > {MAX_SPREAD_TOLERANCE}")
                 await db_manager.record_market_analysis(
                     market.market_id, "SPREAD_FILTERED", decision.confidence, total_analysis_cost, f"High spread: {implied_spread_cost:.2f}"
                 )
@@ -493,7 +493,7 @@ async def make_decision_for_market(
             )
             
             if not should_trade:
-                logger.info(f"❌ EDGE FILTER REJECTED: {market.market_id} - {trade_reason}")
+                logger.debug(f"❌ EDGE FILTER REJECTED: {market.market_id} - {trade_reason}")
                 await db_manager.record_market_analysis(
                     market.market_id, "EDGE_FILTERED", decision.confidence, total_analysis_cost, trade_reason
                 )
@@ -639,67 +639,6 @@ async def make_decision_for_market(
         except Exception as logging_error:
             logger.warning(f"Failed to record market analysis error for {market.market_id}: {logging_error}")
         return None
-
-
-def calculate_dynamic_exit_strategy(
-    confidence: float,
-    market_volatility: float,
-    time_to_expiry: float,
-    current_price: float,
-    edge_magnitude: float
-) -> Dict:
-    """
-    Calculate dynamic exit strategy based on market conditions.
-    
-    This implements sophisticated exit logic that adapts to:
-    - Market volatility (higher vol = tighter stops)
-    - Time to expiry (longer time = looser stops)
-    - Confidence level (higher confidence = wider stops)
-    - Edge magnitude (bigger edge = longer hold time)
-    """
-    try:
-        # Base parameters
-        base_stop_loss_distance = 0.15  # 15 cents default
-        base_take_profit_distance = 0.25  # 25 cents default
-        base_max_hold_hours = 72  # 3 days default
-        
-        # Adjust based on volatility
-        vol_multiplier = max(0.5, min(2.0, market_volatility / 0.1))  # Scale around 10% vol
-        stop_loss_distance = base_stop_loss_distance * vol_multiplier
-        take_profit_distance = base_take_profit_distance * vol_multiplier
-        
-        # Adjust based on confidence
-        confidence_factor = max(0.5, min(2.0, confidence / 0.75))  # Scale around 75% confidence
-        stop_loss_distance /= confidence_factor  # Higher confidence = tighter stops
-        take_profit_distance *= confidence_factor  # Higher confidence = wider targets
-        
-        # Adjust based on time to expiry
-        time_factor = max(0.3, min(3.0, time_to_expiry / 7))  # Scale around 7 days
-        max_hold_hours = min(base_max_hold_hours * time_factor, time_to_expiry * 24 * 0.8)  # Max 80% of time to expiry
-        
-        # Calculate actual prices
-        stop_loss_price = max(0.01, current_price - stop_loss_distance)
-        take_profit_price = min(0.99, current_price + take_profit_distance)
-        
-        # Confidence change threshold (exit if confidence drops significantly)
-        target_confidence_change = max(0.1, 0.3 - (edge_magnitude * 0.5))  # Bigger edge = more tolerance
-        
-        return {
-            'stop_loss_price': round(stop_loss_price, 2),
-            'take_profit_price': round(take_profit_price, 2),
-            'max_hold_hours': int(max_hold_hours),
-            'target_confidence_change': round(target_confidence_change, 2)
-        }
-        
-    except Exception as e:
-        logger.error(f"Error calculating exit strategy: {e}")
-        # Return conservative defaults
-        return {
-            'stop_loss_price': max(0.01, current_price - 0.10),
-            'take_profit_price': min(0.99, current_price + 0.20),
-            'max_hold_hours': 48,
-            'target_confidence_change': 0.2
-        }
 
 
 def estimate_market_volatility(market: Market) -> float:
