@@ -77,7 +77,7 @@ class TradingConfig:
     # === AI MODE TOGGLE ===
     # Set to False to disable XAI/Grok API calls and use internal rule-based logic
     # This saves API costs while still allowing trading based on market heuristics
-    use_ai_for_decisions: bool = False  # TEMPORARILY DISABLED to save API costs
+    use_ai_for_decisions: bool = True  # AI enabled for Grok-4 powered decisions
     
     # Position sizing and risk management - MADE MORE AGGRESSIVE  
     max_position_size_pct: float = 5.0  # INCREASED: Back to 5% per position (was 3%)
@@ -131,7 +131,7 @@ class TradingConfig:
 
     # Cost control and market analysis frequency
     # NOTE: daily_ai_budget is the SINGLE SOURCE OF TRUTH for AI spending limits
-    daily_ai_budget: float = 1.0  # Daily AI API spending limit in USD (current: $1.00)
+    daily_ai_budget: float = 5.0  # Daily AI API spending limit in USD (current: $5.00)
     max_ai_cost_per_decision: float = 0.08  # Maximum cost per trading decision
     analysis_cooldown_hours: int = 4  # Hours between re-analyzing same market
     max_analyses_per_market_per_day: int = 4  # Maximum AI analyses per market per day
