@@ -581,33 +581,37 @@ def show_overview(performance_data, positions, system_health_data):
                 strategy_trades.append(stats.get('completed_trades', 0))
                 strategy_win_rates.append(stats.get('win_rate_pct', 0))
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # P&L by strategy
-            fig_pnl = px.bar(
-                x=strategy_names,
-                y=strategy_pnl,
-                title="P&L by Strategy",
-                labels={'x': 'Strategy', 'y': 'P&L ($)'},
-                color=strategy_pnl,
-                color_continuous_scale='RdYlGn'
-            )
-            fig_pnl.update_layout(showlegend=False, height=400)
-            st.plotly_chart(fig_pnl, use_container_width=True)
-        
-        with col2:
-            # Win rate by strategy
-            fig_winrate = px.bar(
-                x=strategy_names,
-                y=strategy_win_rates,
-                title="Win Rate by Strategy (%)",
-                labels={'x': 'Strategy', 'y': 'Win Rate (%)'},
-                color=strategy_win_rates,
-                color_continuous_scale='Blues'
-            )
-            fig_winrate.update_layout(showlegend=False, height=400)
-            st.plotly_chart(fig_winrate, use_container_width=True)
+        # Only create charts if there's data to display
+        if strategy_names:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # P&L by strategy
+                fig_pnl = px.bar(
+                    x=strategy_names,
+                    y=strategy_pnl,
+                    title="P&L by Strategy",
+                    labels={'x': 'Strategy', 'y': 'P&L ($)'},
+                    color=strategy_pnl,
+                    color_continuous_scale='RdYlGn'
+                )
+                fig_pnl.update_layout(showlegend=False, height=400)
+                st.plotly_chart(fig_pnl, use_container_width=True)
+            
+            with col2:
+                # Win rate by strategy
+                fig_winrate = px.bar(
+                    x=strategy_names,
+                    y=strategy_win_rates,
+                    title="Win Rate by Strategy (%)",
+                    labels={'x': 'Strategy', 'y': 'Win Rate (%)'},
+                    color=strategy_win_rates,
+                    color_continuous_scale='Blues'
+                )
+                fig_winrate.update_layout(showlegend=False, height=400)
+                st.plotly_chart(fig_winrate, use_container_width=True)
+        else:
+            st.info("📊 **No strategy performance data available** - Charts will appear after trades are completed")
     else:
         st.info("📊 **No strategy data yet** - Run the trading system to start collecting performance data")
     
@@ -737,13 +741,19 @@ def show_strategy_performance(performance_data):
         
         with col2:
             # Capital deployment
-            fig_capital = px.pie(
-                values=[stats['capital_deployed'] for stats in performance_data.values() if stats != performance_data.get('_totals', {})],
-                names=[strategy for strategy in performance_data.keys() if strategy != '_totals'],
-                title="Capital Deployment by Strategy"
-            )
-            fig_capital.update_layout(height=500)
-            st.plotly_chart(fig_capital, use_container_width=True)
+            capital_values = [stats['capital_deployed'] for stats in performance_data.values() if stats != performance_data.get('_totals', {})]
+            capital_names = [strategy for strategy in performance_data.keys() if strategy != '_totals']
+            
+            if capital_names and any(v > 0 for v in capital_values):
+                fig_capital = px.pie(
+                    values=capital_values,
+                    names=capital_names,
+                    title="Capital Deployment by Strategy"
+                )
+                fig_capital.update_layout(height=500)
+                st.plotly_chart(fig_capital, use_container_width=True)
+            else:
+                st.info("📊 **No capital deployment data** - Chart will appear when strategies have deployed capital")
     
     else:
         # Show individual strategy details
