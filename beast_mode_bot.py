@@ -566,6 +566,11 @@ class BeastModeBot:
         Check if we should continue trading based on daily AI cost limits.
         Returns True if we can continue, False if we should pause.
         """
+        # BYPASS: If AI is disabled (using internal logic), skip the limit check entirely
+        if not settings.trading.use_ai_for_decisions:
+            self.logger.debug("AI bypass active (use_ai_for_decisions=False) - skipping AI limit check")
+            return True
+        
         if not settings.trading.enable_daily_cost_limiting:
             return True
 
