@@ -583,7 +583,20 @@ class AdvancedMarketMaker:
     async def _get_ai_analysis(self, market: Market) -> Optional[Dict]:
         """
         Get AI analysis for market making edge calculation.
+        Falls back to conservative defaults when AI is disabled.
         """
+        # CHECK: Skip AI call if use_ai_for_decisions is False
+        from src.config.settings import settings
+        if not settings.trading.use_ai_for_decisions:
+            self.logger.debug(f"🔧 AI DISABLED: Using defaults for market making {market.market_id}")
+            # Return conservative defaults for market making - no AI call
+            return {
+                'probability': 0.5,  # Neutral probability
+                'confidence': 0.3,  # Low confidence without AI
+                'volatility_factors': 'AI disabled - using conservative defaults',
+                'stability': 0.5  # Neutral stability
+            }
+        
         try:
             # Use existing AI analysis but optimized for market making
             prompt = f"""

@@ -288,7 +288,19 @@ class QuickFlipScalpingStrategy:
     ) -> dict:
         """
         Use AI to analyze potential for quick price movement.
+        Falls back to conservative defaults when AI is disabled.
         """
+        # CHECK: Skip AI call if use_ai_for_decisions is False
+        from src.config.settings import settings
+        if not settings.trading.use_ai_for_decisions:
+            self.logger.debug(f"🔧 AI DISABLED: Using conservative defaults for quick flip {market.market_id}")
+            # Return conservative defaults - no AI call
+            return {
+                'target_price': current_price + 1,  # Conservative 1¢ movement target
+                'confidence': 0.3,  # Low confidence without AI
+                'reason': 'AI disabled - using conservative defaults'
+            }
+        
         try:
             # Create focused prompt for quick movement analysis
             prompt = f"""
