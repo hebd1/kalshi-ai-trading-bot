@@ -78,6 +78,81 @@ class QuickFlipScalpingStrategy:
         # Track active positions for this strategy
         self.active_positions: Dict[str, Position] = {}
         self.pending_sells: Dict[str, dict] = {}  # Track pending sell orders
+    
+    async def async_init(self) -> None:
+        """
+        Initialize strategy state from database on startup.
+        
+        Recovers:
+        1. Active positions with strategy='quick_flip_scalping'
+        2. Pending sell orders and reconstructs pending_sells dict
+        
+        This ensures no positions or orders are lost across restarts.
+        """
+        self.logger.info("🔄 Recovering quick flip state from database...")
+        
+        try:
+            # Step 1: Recover active positions
+            all_open_positions = await self.db_manager.get_open_positions()
+            
+            # Filter to only quick_flip_scalping positions
+            quick_flip_positions = [
+                pos for pos in all_open_positions 
+                if pos.strategy == 'quick_flip_scalping'
+            ]
+            
+            self.logger.info(f"Found {len(quick_flip_positions)} open quick flip positions")
+            
+            # Step 2: Rebuild active_positions and pending_sells dicts
+            recovered_positions = 0
+            recovered_sells = 0
+            
+            for position in quick_flip_positions:
+                if not position.id:
+                    continue
+                    
+                # Add to active_positions
+                self.active_positions[position.market_id] = position
+                recovered_positions += 1
+                
+                # Check for pending sell orders linked to this position
+                orders = await self.db_manager.get_orders_by_position(position.id)
+                
+                for order in orders:
+                    # Look for sell limit orders that are still active
+                    if (order.action == 'sell' and 
+                        order.order_type == 'limit' and
+                        order.status in ['pending', 'placed', 'submitted']):
+                        
+                        # Reconstruct pending_sells entry
+                        # Use order.created_at for placed_at
+                        placed_at = order.created_at if order.created_at else datetime.now()
+                        
+                        # Calculate max_hold_until from position timestamp + config
+                        max_hold_until = position.timestamp + timedelta(minutes=self.config.max_hold_minutes)
+                        
+                        self.pending_sells[position.market_id] = {
+                            'position': position,
+                            'target_price': order.price if order.price else 0.0,
+                            'placed_at': placed_at,
+                            'max_hold_until': max_hold_until
+                        }
+                        recovered_sells += 1
+                        
+                        self.logger.info(
+                            f"   ✅ Recovered pending sell: {position.market_id} "
+                            f"target=${order.price:.3f} placed_at={placed_at}"
+                        )
+                        break  # Only need one active sell per position
+            
+            self.logger.info(
+                f"✅ Quick flip recovery complete: "
+                f"{recovered_positions} positions, {recovered_sells} pending sells"
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error during quick flip state recovery: {e}")
+            # Don't fail startup, just log the error
         
     async def identify_quick_flip_opportunities(
         self, 
@@ -720,6 +795,9 @@ async def run_quick_flip_strategy(
         strategy = QuickFlipScalpingStrategy(
             db_manager, kalshi_client, xai_client, config
         )
+        
+        # Recover state from database (pending sells, active positions)
+        await strategy.async_init()
         
         # Get available markets
         markets = await db_manager.get_eligible_markets(

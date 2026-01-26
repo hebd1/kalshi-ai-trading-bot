@@ -63,10 +63,26 @@ async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: 
             
             if position_count != 0 and ticker:
                 side = 'YES' if position_count > 0 else 'NO'
+                
+                # CRITICAL FIX: Check if ANY position exists (including closed/failed)
+                # This prevents the infinite re-sync loop where:
+                # 1. Position synced → stop-loss closes it → marked 'closed' in DB
+                # 2. Next sync sees Kalshi position, doesn't find 'open' position in DB
+                # 3. Creates NEW sync_recovery → stop-loss → repeat forever
+                # By checking for ANY position (not just open), we prevent re-syncing
+                has_any_position = await db_manager.has_any_position_for_market_and_side(ticker, side)
+                
+                if has_any_position:
+                    # Position record exists (open, closed, or failed) - skip sync
+                    # This prevents infinite re-sync loop for positions that were closed by stop-loss
+                    logger.debug(f"Position record already exists for {ticker} {side} - skipping sync")
+                    continue
+                
+                # Only get open position for updating (not for existence check)
                 db_pos = await db_manager.get_position_by_market_and_side(ticker, side)
                 
                 if not db_pos:
-                    # Position exists on Kalshi but not in DB - create it
+                    # Position exists on Kalshi but NO record in DB at all - create it
                     try:
                         market_data = await kalshi_client.get_market(ticker)
                         market_info = market_data.get('market', {})
@@ -278,6 +294,17 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
                 logger.info(
                     f"✅ Database sync: {sync_results['synced']} positions synced, "
                     f"{sync_results['closed']} stale positions closed"
+                )
+            
+            # Step 0.5: Clean up orphaned positions (failed executions)
+            # Orphan positions have status='open' but live=False and are older than 10 minutes
+            logger.info("🧹 Checking for orphaned positions (failed executions)...")
+            cleanup_results = await db_manager.cleanup_orphaned_positions(max_age_minutes=10)
+            
+            if cleanup_results['orphans_cleaned'] > 0:
+                logger.info(
+                    f"🧹 Orphan cleanup: {cleanup_results['orphans_cleaned']}/{cleanup_results['orphans_found']} "
+                    f"orphaned positions marked as failed"
                 )
         
         # Step 1: Place sell limit orders for profit-taking and stop-loss

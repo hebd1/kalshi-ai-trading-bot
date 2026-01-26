@@ -74,7 +74,7 @@ def make_internal_trading_decision(
         # Strategy 1: High-Confidence Near-Expiry
         # If market is near expiry and price is extreme, trade toward resolution
         if hours_to_expiry <= 24 and hours_to_expiry > 0:
-            if yes_price >= 0.90:
+            if yes_price >= 0.85:
                 return InternalTradingDecision(
                     action="BUY",
                     side="YES",
@@ -82,7 +82,7 @@ def make_internal_trading_decision(
                     limit_price=int(yes_price * 100),
                     reasoning=f"Near-expiry high-probability YES (price={yes_price:.2f}, hours_to_expiry={hours_to_expiry:.1f})"
                 )
-            elif yes_price <= 0.10:
+            elif yes_price <= 0.15:
                 return InternalTradingDecision(
                     action="BUY",
                     side="NO",
@@ -93,7 +93,7 @@ def make_internal_trading_decision(
         
         # Strategy 2: Extreme Price Opportunities (not near expiry)
         # Markets with very extreme prices often have edge
-        if yes_price >= 0.92:
+        if yes_price >= 0.88:
             # Very high YES price - likely to resolve YES
             return InternalTradingDecision(
                 action="BUY",
@@ -102,7 +102,7 @@ def make_internal_trading_decision(
                 limit_price=int(yes_price * 100),
                 reasoning=f"Extreme high YES price suggests strong probability (price={yes_price:.2f})"
             )
-        elif yes_price <= 0.08:
+        elif yes_price <= 0.12:
             # Very low YES price - likely to resolve NO
             return InternalTradingDecision(
                 action="BUY",
@@ -114,7 +114,7 @@ def make_internal_trading_decision(
         
         # Strategy 3: Tight Spread, High Volume Opportunities
         # Markets with good liquidity and tight spreads in middle range
-        if volume >= 5000 and spread <= 0.03:
+        if volume >= 500 and spread <= 0.05:
             # High volume, tight spread - good market for trading
             # Use slight contrarian approach on mid-range prices
             if 0.45 <= yes_price <= 0.55:
@@ -146,8 +146,8 @@ def make_internal_trading_decision(
         
         # Strategy 4: Volume-Weighted Opportunities
         # Very high volume markets with moderate prices
-        if volume >= 10000:
-            if yes_price >= 0.70:
+        if volume >= 1000:
+            if yes_price >= 0.65:
                 return InternalTradingDecision(
                     action="BUY",
                     side="YES",
@@ -155,7 +155,7 @@ def make_internal_trading_decision(
                     limit_price=int(yes_price * 100),
                     reasoning=f"Very high volume YES opportunity (volume={volume}, price={yes_price:.2f})"
                 )
-            elif yes_price <= 0.30:
+            elif yes_price <= 0.35:
                 return InternalTradingDecision(
                     action="BUY",
                     side="NO",
@@ -211,11 +211,11 @@ def get_internal_probability_estimate(
         base_confidence = 0.50
         
         # Adjust confidence based on volume (more volume = more reliable price)
-        if volume >= 10000:
+        if volume >= 2000:
             volume_boost = 0.15
-        elif volume >= 5000:
-            volume_boost = 0.10
         elif volume >= 1000:
+            volume_boost = 0.10
+        elif volume >= 500:
             volume_boost = 0.05
         else:
             volume_boost = 0.0
@@ -275,7 +275,7 @@ def should_skip_market_without_ai(
         return True, f"Market in uncertain range ({yes_price:.2f}), requires AI analysis"
     
     # Skip low volume markets when not near expiry
-    if volume < 500 and hours_to_expiry > 48:
+    if volume < 200 and hours_to_expiry > 48:
         return True, f"Low volume ({volume}) with distant expiry, too risky without AI"
     
     # Skip markets with wide spreads

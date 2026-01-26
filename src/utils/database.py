@@ -649,6 +649,66 @@ class DatabaseManager(TradingLoggerMixin):
                 positions.append(Position(**position_dict))
             return positions
 
+    async def cleanup_orphaned_positions(self, max_age_minutes: int = 10) -> Dict[str, int]:
+        """
+        Clean up orphaned positions that failed execution.
+        
+        Orphaned positions are those with status='open' AND live=0 that are older than
+        max_age_minutes. These occur when execute_position() fails after add_position().
+        
+        Args:
+            max_age_minutes: Positions older than this (in minutes) with live=0 are marked failed.
+        
+        Returns:
+            Dictionary with cleanup results: {'orphans_found': int, 'orphans_cleaned': int}
+        """
+        results = {'orphans_found': 0, 'orphans_cleaned': 0, 'errors': 0}
+        
+        try:
+            orphaned_positions = await self.get_open_non_live_positions()
+            results['orphans_found'] = len(orphaned_positions)
+            
+            if not orphaned_positions:
+                return results
+            
+            cutoff_time = datetime.now() - timedelta(minutes=max_age_minutes)
+            
+            async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
+                for pos in orphaned_positions:
+                    try:
+                        # Only clean up positions older than the cutoff
+                        # (recent ones may still be executing)
+                        if pos.timestamp < cutoff_time:
+                            await db.execute("""
+                                UPDATE positions 
+                                SET status = 'failed', live = 0
+                                WHERE id = ? AND status = 'open' AND live = 0
+                            """, (pos.id,))
+                            results['orphans_cleaned'] += 1
+                            
+                            self.logger.warning(
+                                f"🧹 Cleaned orphaned position: {pos.market_id} {pos.side} "
+                                f"(created {pos.timestamp}, strategy={pos.strategy})"
+                            )
+                    except Exception as e:
+                        self.logger.error(f"Error cleaning orphan position {pos.id}: {e}")
+                        results['errors'] += 1
+                
+                await db.commit()
+            
+            if results['orphans_cleaned'] > 0:
+                self.logger.info(
+                    f"🧹 Orphan cleanup complete: {results['orphans_cleaned']}/{results['orphans_found']} "
+                    f"positions marked as failed"
+                )
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"Error in orphan position cleanup: {e}")
+            results['errors'] += 1
+            return results
+
     @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def update_position_status(self, position_id: int, status: str):
         """
@@ -708,6 +768,34 @@ class DatabaseManager(TradingLoggerMixin):
                 position_dict['timestamp'] = datetime.fromisoformat(position_dict['timestamp'])
                 return Position(**position_dict)
             return None
+
+    async def has_any_position_for_market_and_side(self, market_id: str, side: str) -> bool:
+        """
+        Check if ANY position exists for market and side (including closed/failed).
+        
+        CRITICAL FIX: This method prevents the infinite re-sync loop where:
+        1. A position is synced from Kalshi
+        2. Stop-loss triggers and position is marked 'closed' in DB
+        3. Next sync sees position on Kalshi but not 'open' in DB
+        4. Bot creates NEW sync_recovery position → infinite loop
+        
+        This method returns True if ANY position record exists, regardless of status,
+        preventing duplicate sync_recovery positions.
+        
+        Args:
+            market_id: The ID of the market.
+            side: The side of the position ('YES' or 'NO').
+
+        Returns:
+            True if any position (open, closed, or failed) exists for this market/side.
+        """
+        async with aiosqlite.connect(self.db_path, timeout=self.timeout) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM positions WHERE market_id = ? AND side = ?", 
+                (market_id, side)
+            )
+            count = (await cursor.fetchone())[0]
+            return count > 0
 
     @retry_on_locked_db(max_retries=5, base_delay=0.2)
     async def add_trade_log(self, trade_log: TradeLog) -> None:

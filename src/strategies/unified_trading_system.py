@@ -56,10 +56,10 @@ from src.strategies.arbitrage_scanner import ArbitrageScanner
 class TradingSystemConfig:
     """Configuration for the unified trading system."""
     # Capital allocation across strategies
-    market_making_allocation: float = 0.30  # 30% for market making
-    directional_trading_allocation: float = 0.40  # 40% for directional positions
+    market_making_allocation: float = 0.25  # 25% for market making
+    directional_trading_allocation: float = 0.30  # 30% for directional positions
     quick_flip_allocation: float = 0.30     # 30% for quick flip scalping
-    arbitrage_allocation: float = 0.00      # 0% for arbitrage opportunities
+    arbitrage_allocation: float = 0.15      # 15% for arbitrage opportunities
     
     # Risk management
     max_portfolio_volatility: float = 0.20  # 20% max portfolio vol

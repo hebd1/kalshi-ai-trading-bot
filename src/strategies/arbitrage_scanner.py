@@ -55,7 +55,7 @@ class ArbitrageScanner:
                 response = await self.kalshi_client.get_markets(
                     limit=100, 
                     cursor=cursor,
-                    status="active"  # Standard Kalshi API status for tradeable markets
+                    status="open"  # Kalshi API uses "open" for tradeable markets
                 )
                 markets_page = response.get("markets", [])
                 all_markets.extend(markets_page)
@@ -330,8 +330,11 @@ class ArbitrageScanner:
         }
         
         try:
-            # 1. Create Position Record in DB
+            # 1. Create Position Record in DB (live=False until execution succeeds)
             # We tag it with the group_id (event_ticker) to link them later
+            # CRITICAL: Position starts as live=False, only becomes live after 
+            # successful order fill via update_position_to_live()
+            # This ensures orphan cleanup catches failed arbitrage executions
             position = Position(
                 market_id=ticker,
                 side="YES",
@@ -340,7 +343,7 @@ class ArbitrageScanner:
                 timestamp=datetime.now(),
                 rationale=f"Arbitrage No-Resolution Group: {group_id}",
                 confidence=1.0, # Mathematical certainty (model assumption)
-                live=live_mode,
+                live=False,  # SAFE PATTERN: Start non-live, update after fill
                 status='open',
                 strategy='arbitrage'  # Must match monitoring/summary filters
             )

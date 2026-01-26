@@ -164,9 +164,9 @@ class LoggingConfig:
 
 # === CAPITAL ALLOCATION ACROSS STRATEGIES ===
 # Allocate capital across different trading approaches
-market_making_allocation: float = 0.40  # 40% for market making (spread profits)
-directional_allocation: float = 0.50    # 50% for directional trading (AI predictions) 
-arbitrage_allocation: float = 0.10      # 10% for arbitrage opportunities
+market_making_allocation: float = 0.35  # 35% for market making (spread profits)
+directional_allocation: float = 0.35    # 35% for directional trading (AI predictions) 
+arbitrage_allocation: float = 0.15      # 15% for arbitrage opportunities
 
   # === PORTFOLIO OPTIMIZATION SETTINGS ===
 # Kelly Criterion is now the PRIMARY position sizing method (moved to TradingConfig)

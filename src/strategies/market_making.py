@@ -23,7 +23,7 @@ import numpy as np
 
 from src.clients.kalshi_client import KalshiClient
 from src.clients.xai_client import XAIClient
-from src.utils.database import DatabaseManager, Market
+from src.utils.database import DatabaseManager, Market, Order
 from src.config.settings import settings
 from src.utils.logging_setup import get_trading_logger
 
@@ -37,7 +37,8 @@ class LimitOrder:
     quantity: int
     order_type: str = "limit"
     status: str = "pending"  # pending, placed, filled, cancelled
-    order_id: Optional[str] = None
+    order_id: Optional[str] = None  # Kalshi API order ID
+    db_order_id: Optional[int] = None  # Database record ID for status tracking
     placed_at: Optional[datetime] = None
     expected_profit: float = 0.0
     
@@ -110,6 +111,92 @@ class AdvancedMarketMaker:
         self.markets_traded = 0
         self.total_volume = 0
         self.win_rate = 0.0
+
+    async def async_init(self) -> None:
+        """
+        Async initialization to recover persisted orders from database.
+        
+        CRITICAL: Must be called after construction to restore active orders
+        that were placed but not yet filled/cancelled before a restart.
+        This prevents orders from being "orphaned" and going unmonitored.
+        """
+        try:
+            # Get pending/placed orders from database
+            pending_orders = await self.db_manager.get_pending_orders()
+            
+            if not pending_orders:
+                self.logger.info("No pending orders to recover from database")
+                return
+            
+            recovered_count = 0
+            for db_order in pending_orders:
+                # Only recover market making orders (limit orders)
+                if db_order.order_type != "limit":
+                    continue
+                
+                # Convert database Order back to LimitOrder
+                limit_order = LimitOrder(
+                    market_id=db_order.market_id,
+                    side=db_order.side,
+                    price=db_order.price or 0.0,
+                    quantity=db_order.quantity,
+                    order_type=db_order.order_type,
+                    status=db_order.status,
+                    order_id=db_order.kalshi_order_id,
+                    db_order_id=db_order.id,
+                    placed_at=db_order.created_at,
+                    expected_profit=0.0  # Unknown for recovered orders
+                )
+                
+                # Add to active_orders dictionary by market_id
+                if limit_order.market_id not in self.active_orders:
+                    self.active_orders[limit_order.market_id] = []
+                self.active_orders[limit_order.market_id].append(limit_order)
+                recovered_count += 1
+                
+                self.logger.info(
+                    f"Recovered pending order from database: {limit_order.market_id} "
+                    f"{limit_order.side} @ {limit_order.price}¢ (db_id={limit_order.db_order_id})"
+                )
+            
+            if recovered_count > 0:
+                self.logger.info(
+                    f"✅ Recovered {recovered_count} pending market making orders from database"
+                )
+            
+        except Exception as e:
+            self.logger.error(f"Error recovering orders from database: {e}")
+
+    def _limit_order_to_db_order(
+        self, 
+        limit_order: LimitOrder, 
+        action: str = "buy",
+        position_id: Optional[int] = None
+    ) -> Order:
+        """
+        Convert in-memory LimitOrder to database Order for persistence.
+        
+        Args:
+            limit_order: The in-memory order representation
+            action: "buy" or "sell"
+            position_id: Optional associated position ID
+            
+        Returns:
+            Database Order object ready for persistence
+        """
+        return Order(
+            market_id=limit_order.market_id,
+            side=limit_order.side,
+            action=action,
+            order_type=limit_order.order_type,
+            quantity=limit_order.quantity,
+            price=limit_order.price,
+            status=limit_order.status,
+            kalshi_order_id=limit_order.order_id,
+            client_order_id=None,  # Will be set during order placement
+            created_at=limit_order.placed_at or datetime.now(),
+            position_id=position_id
+        )
 
     async def analyze_market_making_opportunities(
         self, 
@@ -445,6 +532,18 @@ class AdvancedMarketMaker:
                     order.placed_at = datetime.now()
                     order.order_id = response['order'].get('order_id', client_order_id)
                     
+                    # Persist order to database for monitoring
+                    if self.db_manager:
+                        try:
+                            db_order = self._limit_order_to_db_order(order, action="buy")
+                            db_order.client_order_id = client_order_id
+                            db_order.kalshi_order_id = order.order_id
+                            db_order_id = await self.db_manager.add_order(db_order)
+                            order.db_order_id = db_order_id  # Store DB ID for status tracking
+                            self.logger.debug(f"Persisted market making order to database: {order.order_id} (db_id: {db_order_id})")
+                        except Exception as db_error:
+                            self.logger.warning(f"Failed to persist order to database: {db_error}")
+                    
                     self.logger.info(
                         f"✅ LIVE limit order placed: {order.side} {order.quantity} at {order.price:.1f}¢ "
                         f"for market {order.market_id} (Order ID: {order.order_id})"
@@ -452,11 +551,24 @@ class AdvancedMarketMaker:
                 else:
                     self.logger.error(f"Failed to place live order: {response}")
                     order.status = "failed"
+                    # Note: No DB update needed here - order was never persisted
             else:
                 # Simulate order placement for paper trading
                 order.status = "placed"
                 order.placed_at = datetime.now()
                 order.order_id = f"sim_{order.market_id}_{order.side}_{int(datetime.now().timestamp())}"
+                
+                # Persist simulated order to database for monitoring
+                if self.db_manager:
+                    try:
+                        db_order = self._limit_order_to_db_order(order, action="buy")
+                        db_order.client_order_id = order.order_id  # Use sim ID as client ID
+                        db_order.kalshi_order_id = order.order_id
+                        db_order_id = await self.db_manager.add_order(db_order)
+                        order.db_order_id = db_order_id  # Store DB ID for status tracking
+                        self.logger.debug(f"Persisted simulated market making order to database: {order.order_id} (db_id: {db_order_id})")
+                    except Exception as db_error:
+                        self.logger.warning(f"Failed to persist simulated order to database: {db_error}")
                 
                 self.logger.info(
                     f"📝 SIMULATED limit order placed: {order.side} {order.quantity} at {order.price:.1f}¢ "
@@ -466,6 +578,7 @@ class AdvancedMarketMaker:
         except Exception as e:
             self.logger.error(f"Error placing limit order: {e}")
             order.status = "failed"
+            # Note: Exception during placement means order was likely never persisted to DB
 
     async def _get_ai_analysis(self, market: Market) -> Optional[Dict]:
         """
@@ -553,7 +666,17 @@ class AdvancedMarketMaker:
     async def monitor_and_update_orders(self):
         """
         Monitor active orders and update/cancel as needed.
+        
+        This method:
+        1. First checks for filled orders via Kalshi API (syncs state)
+        2. Then checks if remaining orders need price updates
         """
+        # Step 1: Check for fills first to sync state with exchange
+        fills_detected = await self._check_order_fills()
+        if fills_detected > 0:
+            self.logger.info(f"📊 Detected {fills_detected} filled orders during monitoring")
+        
+        # Step 2: Monitor and update remaining active orders
         for market_id, orders in self.active_orders.items():
             try:
                 for order in orders:
@@ -598,6 +721,14 @@ class AdvancedMarketMaker:
             # Cancel old order and place new one
             order.status = "cancelled"
             
+            # Sync cancelled status to database
+            if self.db_manager and order.db_order_id:
+                try:
+                    await self.db_manager.update_order_status(order.db_order_id, "cancelled")
+                    self.logger.debug(f"Updated order status to cancelled in database: db_id={order.db_order_id}")
+                except Exception as db_error:
+                    self.logger.warning(f"Failed to update cancelled order status in database: {db_error}")
+            
             # Recalculate optimal price
             # This would need to recalculate the market making opportunity
             
@@ -605,6 +736,126 @@ class AdvancedMarketMaker:
             
         except Exception as e:
             self.logger.error(f"Error updating order: {e}")
+
+    async def _check_order_fills(self) -> int:
+        """
+        Check for filled orders via Kalshi API and update state.
+        
+        CRITICAL: This method detects when limit orders have been filled on Kalshi
+        and updates both the database and in-memory state to reflect the fill.
+        
+        Returns:
+            Number of newly detected fills
+        """
+        fills_detected = 0
+        
+        try:
+            # Collect all placed order IDs across all markets
+            placed_orders = []
+            for market_id, orders in self.active_orders.items():
+                for order in orders:
+                    if order.status == "placed" and order.order_id:
+                        placed_orders.append((market_id, order))
+            
+            if not placed_orders:
+                return 0
+            
+            self.logger.debug(f"Checking fill status for {len(placed_orders)} active orders")
+            
+            # Query Kalshi for current order statuses
+            # Use get_orders() to check status of all our orders
+            for market_id, order in placed_orders:
+                try:
+                    # Get orders for this market
+                    orders_response = await self.kalshi_client.get_orders(ticker=market_id)
+                    kalshi_orders = orders_response.get('orders', [])
+                    
+                    # Find matching order by order_id
+                    for kalshi_order in kalshi_orders:
+                        if kalshi_order.get('order_id') == order.order_id:
+                            kalshi_status = kalshi_order.get('status', '').lower()
+                            
+                            # Detect fill
+                            if kalshi_status == 'filled' and order.status != 'filled':
+                                self.logger.info(
+                                    f"🎯 ORDER FILLED: {market_id} {order.side} @ ${order.price:.2f} "
+                                    f"x{order.quantity} (order_id={order.order_id})"
+                                )
+                                
+                                # Update in-memory status
+                                order.status = 'filled'
+                                
+                                # Update database status
+                                if order.db_order_id:
+                                    try:
+                                        # Get fill price from response if available
+                                        fill_price = kalshi_order.get('avg_price', order.price * 100) / 100
+                                        await self.db_manager.update_order_status(
+                                            order.db_order_id,
+                                            'filled',
+                                            fill_price=fill_price
+                                        )
+                                        self.logger.info(
+                                            f"✅ Updated DB order {order.db_order_id} status to 'filled'"
+                                        )
+                                    except Exception as db_error:
+                                        self.logger.warning(
+                                            f"Failed to update filled order status in DB: {db_error}"
+                                        )
+                                
+                                # Move to filled_orders list
+                                self.filled_orders.append(order)
+                                fills_detected += 1
+                                
+                                # Update performance metrics
+                                self.total_volume += order.quantity
+                            
+                            # Also detect external cancellation (e.g., market resolved)
+                            elif kalshi_status in ('cancelled', 'expired') and order.status == 'placed':
+                                self.logger.info(
+                                    f"📛 ORDER CANCELLED/EXPIRED: {market_id} {order.side} "
+                                    f"(order_id={order.order_id}, kalshi_status={kalshi_status})"
+                                )
+                                
+                                order.status = 'cancelled'
+                                
+                                if order.db_order_id:
+                                    try:
+                                        await self.db_manager.update_order_status(
+                                            order.db_order_id,
+                                            'cancelled'
+                                        )
+                                    except Exception as db_error:
+                                        self.logger.warning(
+                                            f"Failed to update cancelled order in DB: {db_error}"
+                                        )
+                            
+                            break  # Found matching order, move to next
+                    
+                except Exception as api_error:
+                    self.logger.warning(
+                        f"Failed to check order status for {market_id}: {api_error}"
+                    )
+                    continue
+            
+            # Clean up filled/cancelled orders from active_orders dict
+            for market_id in list(self.active_orders.keys()):
+                self.active_orders[market_id] = [
+                    o for o in self.active_orders[market_id] 
+                    if o.status == 'placed'
+                ]
+                # Remove market entry if no active orders remain
+                if not self.active_orders[market_id]:
+                    del self.active_orders[market_id]
+            
+            if fills_detected > 0:
+                self.logger.info(f"🎯 Detected {fills_detected} new order fills this cycle")
+            
+            return fills_detected
+            
+        except Exception as e:
+            self.logger.error(f"Error checking order fills: {e}")
+            return 0
 
     def get_performance_summary(self) -> Dict:
         """
@@ -641,6 +892,16 @@ async def run_market_making_strategy(
     try:
         # Initialize market maker
         market_maker = AdvancedMarketMaker(db_manager, kalshi_client, xai_client)
+        
+        # CRITICAL: Recover any pending orders from database on startup
+        # This ensures orders placed before a restart are still monitored
+        await market_maker.async_init()
+        
+        # Immediately check for fills on recovered orders
+        # This catches orders that filled while the bot was offline
+        fills_during_downtime = await market_maker._check_order_fills()
+        if fills_during_downtime > 0:
+            logger.info(f"🔄 Detected {fills_during_downtime} orders filled during bot downtime")
         
         # Get eligible markets (remove time restrictions!)
         markets = await db_manager.get_eligible_markets(
