@@ -28,16 +28,27 @@ async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: 
     Periodic database sync to ensure positions match Kalshi's real-time data.
     Runs every 5 minutes to catch any discrepancies.
     
+    SAFETY FEATURES (added to prevent false-positive closures):
+    1. Grace period: Don't close positions created within the last 10 minutes
+    2. API validation: Don't close positions if Kalshi API returned empty (possible API issue)
+    3. Verification: Query Kalshi again for specific position before closing
+    
     Returns:
-        Dict with sync results: {'synced': int, 'closed': int, 'errors': int}
+        Dict with sync results: {'synced': int, 'closed': int, 'errors': int, 'skipped_grace': int}
     """
     logger = get_trading_logger("db_sync")
-    results = {'synced': 0, 'closed': 0, 'errors': 0}
+    results = {'synced': 0, 'closed': 0, 'errors': 0, 'skipped_grace': 0}
+    
+    # Grace period: Don't close positions created within this many minutes
+    GRACE_PERIOD_MINUTES = 10
     
     try:
         # Get Kalshi positions
         positions_response = await kalshi_client.get_positions()
         kalshi_positions = positions_response.get('market_positions', [])
+        
+        # SAFETY CHECK 1: Log how many positions Kalshi returned
+        logger.info(f"Kalshi API returned {len(kalshi_positions)} positions")
         
         # Build set of active Kalshi market IDs
         kalshi_active = set()
@@ -45,16 +56,66 @@ async def sync_database_with_kalshi(db_manager: DatabaseManager, kalshi_client: 
             if pos.get('position', 0) != 0:
                 kalshi_active.add(pos.get('ticker'))
         
+        logger.info(f"Found {len(kalshi_active)} active positions on Kalshi")
+        
         # Get database positions
         db_positions = await db_manager.get_open_positions()
+        
+        logger.info(f"Database has {len(db_positions)} open positions")
         
         # Check for positions in DB but not on Kalshi (need to close)
         for db_pos in db_positions:
             if db_pos.market_id not in kalshi_active:
-                # This position closed on Kalshi but still open in DB
+                # SAFETY CHECK 2: Grace period - don't close recently created positions
+                position_age_minutes = (datetime.now() - db_pos.timestamp).total_seconds() / 60
+                if position_age_minutes < GRACE_PERIOD_MINUTES:
+                    logger.warning(
+                        f"⏳ GRACE PERIOD: Skipping close for {db_pos.market_id} - "
+                        f"position is only {position_age_minutes:.1f} minutes old (< {GRACE_PERIOD_MINUTES} min threshold)"
+                    )
+                    results['skipped_grace'] += 1
+                    continue
+                
+                # SAFETY CHECK 3: If Kalshi returned ZERO positions, something might be wrong with API
+                # Don't close DB positions if we got an empty response (could be API issue)
+                if len(kalshi_active) == 0 and len(db_positions) > 0:
+                    logger.warning(
+                        f"⚠️ API SAFETY: Kalshi returned 0 positions but DB has {len(db_positions)} - "
+                        f"NOT closing {db_pos.market_id} (possible API issue)"
+                    )
+                    results['errors'] += 1
+                    continue
+                
+                # SAFETY CHECK 4: Verify position is actually closed with direct API query
+                try:
+                    verify_response = await kalshi_client.get_positions(ticker=db_pos.market_id)
+                    verify_positions = verify_response.get('market_positions', [])
+                    
+                    # Check if any position exists for this ticker
+                    position_exists = any(
+                        p.get('ticker') == db_pos.market_id and p.get('position', 0) != 0 
+                        for p in verify_positions
+                    )
+                    
+                    if position_exists:
+                        logger.warning(
+                            f"🔍 VERIFICATION SAVED: {db_pos.market_id} IS on Kalshi after direct query - "
+                            f"NOT closing (initial bulk query was incomplete)"
+                        )
+                        results['errors'] += 1
+                        continue
+                    
+                    logger.info(f"✓ Verified: {db_pos.market_id} confirmed NOT on Kalshi via direct query")
+                    
+                except Exception as verify_error:
+                    logger.error(f"❌ Verification query failed for {db_pos.market_id}: {verify_error} - NOT closing")
+                    results['errors'] += 1
+                    continue
+                
+                # All safety checks passed - position is genuinely closed on Kalshi
                 await db_manager.update_position_status(db_pos.id, 'closed')
                 results['closed'] += 1
-                logger.info(f"Closed stale position: {db_pos.market_id} (not on Kalshi)")
+                logger.info(f"Closed stale position: {db_pos.market_id} (verified not on Kalshi, age: {position_age_minutes:.1f} min)")
         
         # Check for positions on Kalshi but not in DB (add them)
         for kalshi_pos in kalshi_positions:
@@ -290,10 +351,11 @@ async def run_tracking(db_manager: Optional[DatabaseManager] = None):
             sync_results = await sync_database_with_kalshi(db_manager, kalshi_client)
             _last_db_sync = now
             
-            if sync_results['synced'] > 0 or sync_results['closed'] > 0:
+            if sync_results['synced'] > 0 or sync_results['closed'] > 0 or sync_results.get('skipped_grace', 0) > 0:
                 logger.info(
                     f"✅ Database sync: {sync_results['synced']} positions synced, "
-                    f"{sync_results['closed']} stale positions closed"
+                    f"{sync_results['closed']} stale positions closed, "
+                    f"{sync_results.get('skipped_grace', 0)} skipped (grace period)"
                 )
             
             # Step 0.5: Clean up orphaned positions (failed executions)
